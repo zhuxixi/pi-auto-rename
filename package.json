@@ -1,0 +1,34 @@
+{
+  "name": "@zhuxixi/pi-auto-rename",
+  "version": "0.1.0",
+  "description": "AI session naming for pi: derives a short core-goal title from the session's original intent",
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "session",
+    "rename",
+    "title"
+  ],
+  "license": "MIT",
+  "author": "zhuxixi <zhuzhenxi_555@hotmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhuxixi/pi-auto-rename.git"
+  },
+  "type": "module",
+  "files": [
+    "index.ts",
+    "lib/",
+    "CHANGELOG.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

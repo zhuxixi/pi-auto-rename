@@ -1,0 +1,208 @@
+/**
+ * Parameterized cases for lib/auto-rename-core.ts — issue #6.
+ * Covers the trickiest logic in the repo: CJK display-width truncation,
+ * capTitle's regex chain, secret redaction, and the guard-rail classifiers.
+ *
+ * Run with (no test framework — zero-dep, bundled by esbuild):
+ *   npx esbuild test/auto-rename-core.test.ts --bundle --format=esm \
+ *     --platform=node --outfile=/tmp/auto-rename-core-test.mjs && node /tmp/auto-rename-core-test.mjs
+ */
+import {
+	blockText,
+	capTitle,
+	composeTitle,
+	coreFromTitle,
+	coreIsMetaActivity,
+	coreIsNonGoal,
+	earlyExcerpt,
+	earlySelection,
+	isTrivialMessage,
+	looksLikeError,
+	looksLikeResponse,
+	parseIso,
+	redact,
+	scanUserMessages,
+	truncateDisplay,
+} from "../lib/auto-rename-core";
+
+let failed = 0;
+function check(name: string, cond: boolean, detail?: string): void {
+	if (cond) {
+		console.log(`ok   ${name}`);
+	} else {
+		failed++;
+		console.error(`FAIL ${name}${detail ? ` — ${detail}` : ""}`);
+	}
+}
+function eq(name: string, got: unknown, expect: unknown): void {
+	check(name, got === expect, `got ${JSON.stringify(got)}, expected ${JSON.stringify(expect)}`);
+}
+
+// ---- truncateDisplay: display columns, not string length ----
+eq("truncateDisplay ascii", truncateDisplay("hello", 3), "hel");
+eq("truncateDisplay cjk 2-col", truncateDisplay("你好世界", 5), "你好");
+eq("truncateDisplay mixed", truncateDisplay("ab你cd", 5), "ab你c");
+eq("truncateDisplay no half wide char", truncateDisplay("ab你好", 3), "ab");
+eq("truncateDisplay empty", truncateDisplay("", 5), "");
+eq("truncateDisplay zero width", truncateDisplay("abc", 0), "");
+eq("truncateDisplay fits exactly", truncateDisplay("你好", 4), "你好");
+
+// ---- capTitle: quotes / ref prefixes / counters / sentence cut / double cap ----
+eq("capTitle strips ascii quotes", capTitle('"Fix login bug"'), "fix login bug");
+eq("capTitle strips cjk quotes", capTitle("「修复登录越界」"), "修复登录越界");
+eq("capTitle drops Issue #N prefix", capTitle("Issue #6: 建立完整测试覆盖"), "建立完整测试覆盖");
+eq("capTitle drops bare #N prefix", capTitle("#123 修复崩溃"), "修复崩溃");
+eq("capTitle drops round counter", capTitle("round 3 retry logic fix"), "retry logic fix");
+eq("capTitle drops 第N轮 counter", capTitle("第2轮 修复方案"), "修复方案");
+eq("capTitle cuts at sentence end", capTitle("Fix the bug. Then deploy"), "fix the bug");
+eq("capTitle keeps dots in filenames", capTitle("fix config.json loading"), "fix config.json loading");
+eq("capTitle cuts at cjk sentence end", capTitle("修复登录越界。然后优化"), "修复登录越界");
+eq("capTitle word cap", capTitle("one two three four five six seven"), "one two three four five");
+eq("capTitle display-width cap backs off to word boundary", capTitle("hello world foo", 10, 8), "hello");
+eq("capTitle combined quotes+ref+sentence", capTitle('"Issue #42: Fix login. Deploy hotfix"'), "fix login");
+eq("capTitle empty", capTitle(""), "");
+
+// ---- capTitle word-boundary truncation + english lowercase (issue #10) ----
+eq("capTitle word boundary", capTitle("Locate nvim config location"), "locate nvim config");
+eq("capTitle lowercase ascii", capTitle("Fix Login Bug"), "fix login bug");
+eq("capTitle lowercase keeps cjk", capTitle("修复登录越界"), "修复登录越界");
+eq("capTitle lowercase mixed", capTitle("GLM版本升级到5.3"), "glm版本升级到5.3");
+eq("capTitle cjk cut no backoff", capTitle("这是一个非常非常长的中文标题需要截断"), "这是一个非常非常长的中文");
+eq("capTitle hyphen boundary", capTitle("release-all-pipeline-orchestration-x"), "release-all-pipeline");
+
+// ---- coreFromTitle: legacy format migration ----
+eq("coreFromTitle legacy repo+refs", coreFromTitle("owner/repo: fix login | issue#6"), "fix login");
+eq("coreFromTitle keeps colon without slash", coreFromTitle("Fix: login"), "Fix: login");
+eq("coreFromTitle cuts subtask", coreFromTitle("core -- subtask"), "core");
+eq("coreFromTitle empty", coreFromTitle(""), "");
+eq("coreFromTitle trims", coreFromTitle("  spaced core  "), "spaced core");
+
+// ---- composeTitle ----
+eq("composeTitle verbatim", composeTitle("fix login"), "fix login");
+eq("composeTitle empty -> session", composeTitle(""), "session");
+
+// ---- coreIsNonGoal ----
+check("coreIsNonGoal 方案确认", coreIsNonGoal("方案确认"));
+check("coreIsNonGoal Review case-insensitive", coreIsNonGoal("Review"));
+check("coreIsNonGoal ok", coreIsNonGoal("ok"));
+check("coreIsNonGoal whitespace-insensitive", coreIsNonGoal("继 续"));
+check("coreIsNonGoal real goal", !coreIsNonGoal("修复登录越界"));
+check("coreIsNonGoal empty", !coreIsNonGoal(""));
+
+// ---- earlyExcerpt: first-N anchoring + dedup + budget ----
+eq("earlyExcerpt empty", earlyExcerpt([]), "");
+eq("earlyExcerpt takes first 2 only", earlyExcerpt(["a", "b", "c"]), "a\n---\nb");
+eq("earlyExcerpt dedups", earlyExcerpt(["a", "a"]), "a");
+eq("earlyExcerpt per-msg cap 300", earlyExcerpt(["x".repeat(400)]).length, 300);
+
+// ---- redact: secret patterns ----
+eq("redact aws key", redact("use AKIAIOSFODNN7EXAMPLE please"), "use [REDACTED_AWS_KEY] please");
+eq("redact sk- key", redact("key sk-abcdefghijklmnopqrst1234 end"), "key [REDACTED_API_KEY] end");
+eq("redact bearer keeps scheme", redact("Bearer abcdefghijklmnopqrstuvwxyz"), "Bearer [REDACTED]");
+eq("redact KEY= form", redact("API_KEY=supersecretvalue"), "API_KEY=[REDACTED]");
+eq("redact token: form", redact("token: abc123xyz"), "token=[REDACTED]");
+eq(
+	"redact private key block",
+	redact("-----BEGIN RSA PRIVATE KEY-----\nabc123\n-----END RSA PRIVATE KEY-----"),
+	"[REDACTED_PRIVATE_KEY]",
+);
+eq("redact leaves normal text", redact("fix login bug"), "fix login bug");
+
+// ---- looksLikeResponse / looksLikeError ----
+check("looksLikeResponse empty", looksLikeResponse(""));
+check("looksLikeResponse cjk opener", looksLikeResponse("好的，我来处理"));
+check("looksLikeResponse sentence", looksLikeResponse("Fix the bug."));
+check("looksLikeResponse title fragment", !looksLikeResponse("修复登录越界"));
+check("looksLikeError traceback", looksLikeError("Traceback (most recent call last)"));
+check("looksLikeError runtime error", looksLikeError("java RuntimeError boom"));
+check("looksLikeError panic", looksLikeError("kernel panic"));
+check("looksLikeError normal title", !looksLikeError("fix login page"));
+check("looksLikeError bug keyword (regex is case-insensitive)", looksLikeError("fix login bug"));
+check("looksLikeError empty", !looksLikeError(""));
+
+// ---- parseIso ----
+eq("parseIso valid", parseIso("2026-08-15T16:02:20Z"), Date.parse("2026-08-15T16:02:20Z") / 1000);
+eq("parseIso invalid", parseIso("not a date"), null);
+eq("parseIso non-string", parseIso(123), null);
+eq("parseIso undefined", parseIso(undefined), null);
+
+// ---- blockText / scanUserMessages ----
+eq("blockText string passthrough", blockText("hello"), "hello");
+eq(
+	"blockText filters text blocks",
+	blockText([{ type: "text", text: "a" }, { type: "tool_use", id: "1" }, { type: "text", text: "b" }]),
+	"a b",
+);
+eq("blockText non-array", blockText(42), "");
+eq("blockText empty array", blockText([]), "");
+const branch = [
+	{ type: "message", message: { role: "user", content: "first" } },
+	{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "reply" }] } },
+	{ type: "custom", customType: "x" },
+	{ type: "message", message: { role: "user", content: [{ type: "text", text: "second" }] } },
+	{ type: "message", message: { role: "user", content: [] } },
+];
+check(
+	"scanUserMessages keeps genuine user prompts",
+	JSON.stringify(scanUserMessages(branch)) === JSON.stringify(["first", "second"]),
+	JSON.stringify(scanUserMessages(branch)),
+);
+
+// ---- isTrivialMessage: throwaway openers carry no intent (issue #10) ----
+check("isTrivialMessage hello", isTrivialMessage("hello"));
+check("isTrivialMessage Hello!", isTrivialMessage("Hello!"));
+check("isTrivialMessage ok", isTrivialMessage("ok"));
+check("isTrivialMessage 收到", isTrivialMessage("收到"));
+check("isTrivialMessage 在吗？", isTrivialMessage("在吗？"));
+check("isTrivialMessage empty", isTrivialMessage(""));
+check("isTrivialMessage blank", isTrivialMessage("   "));
+check("isTrivialMessage issue list NOT trivial", !isTrivialMessage("issue list"));
+check("isTrivialMessage 修 bug NOT trivial", !isTrivialMessage("修 bug"));
+check("isTrivialMessage real intent NOT trivial", !isTrivialMessage("走GitHub issue driven的流程处理第六个问题"));
+
+// ---- earlySelection: skip trivial openers within the early window (issue #10) ----
+const sel1 = earlySelection(["hello", "issue list", "走GitHub issue driven流程处理第六个问题，给我一个clear report"]);
+check("earlySelection skips greeting, keeps real intent", sel1.text.includes("issue list") && sel1.text.includes("走GitHub"));
+check("earlySelection substantive when real content", sel1.substantive);
+const sel2 = earlySelection(["hello", "hi"]);
+eq("earlySelection all-trivial fallback text", sel2.text, "hello\n---\nhi");
+check("earlySelection all-trivial not substantive", !sel2.substantive);
+const sel3 = earlySelection(["fix the login bug", "add tests"]);
+eq("earlySelection substantive pair", sel3.text, "fix the login bug\n---\nadd tests");
+check("earlySelection substantive flag", sel3.substantive);
+const sel4 = earlySelection(["hello", "hello", "real intent here"]);
+eq("earlySelection dedup", sel4.text, "real intent here");
+const sel5 = earlySelection(["hello", "hi", "ok", "收到", "在吗", "好的", "real intent at position seven"]);
+eq("earlySelection window bound falls back", sel5.text, "hello\n---\nhi");
+check("earlySelection window bound not substantive", !sel5.substantive);
+eq("earlySelection empty", earlySelection([]).text, "");
+check("earlySelection empty not substantive", !earlySelection([]).substantive);
+eq("earlyExcerpt delegates to earlySelection", earlyExcerpt(["hello", "issue list", "real intent"]), "issue list\n---\nreal intent");
+
+// ---- coreIsMetaActivity: process labels are not goals (issue #10) ----
+check("coreIsMetaActivity Issue list triage", coreIsMetaActivity("Issue list triage"));
+check("coreIsMetaActivity GitHub Issue 查看", coreIsMetaActivity("GitHub Issue 查看"));
+check("coreIsMetaActivity GitHub issue analysis", coreIsMetaActivity("GitHub issue analysis"));
+check("coreIsMetaActivity Issue list review", coreIsMetaActivity("Issue list review"));
+check("coreIsMetaActivity Issue list retrieval", coreIsMetaActivity("Issue list retrieval"));
+check("coreIsMetaActivity Issue list compilation", coreIsMetaActivity("Issue list compilation"));
+check("coreIsMetaActivity Issue内容梳理", coreIsMetaActivity("Issue内容梳理"));
+check("coreIsMetaActivity Issue驱动技能包迁移 NOT meta", !coreIsMetaActivity("Issue驱动技能包迁移"));
+check("coreIsMetaActivity 修复登录越界 NOT meta", !coreIsMetaActivity("修复登录越界"));
+check("coreIsMetaActivity llm cache fix NOT meta", !coreIsMetaActivity("llm cache fix"));
+check("coreIsMetaActivity status-bar优化 NOT meta", !coreIsMetaActivity("status-bar优化"));
+check("coreIsMetaActivity Issue List Triage title-cased", coreIsMetaActivity("Issue List Triage")); // PR #11 CR: /i regression
+check("coreIsMetaActivity GitHub Issue Review title-cased", coreIsMetaActivity("GitHub Issue Review"));
+check("coreIsMetaActivity analytics NOT meta (narrowed)", !coreIsMetaActivity("GitHub analytics dashboard"));
+check("coreIsMetaActivity issue analysis still meta", coreIsMetaActivity("GitHub issue analysis"));
+check("coreIsMetaActivity issue analyses meta (verb/plural variants)", coreIsMetaActivity("issue analyses")); // PR #11 CR r2 issue-3
+check("coreIsMetaActivity analyze issues meta", coreIsMetaActivity("analyze issues"));
+check("coreIsMetaActivity GitHub Checklist NOT meta (word boundary)", !coreIsMetaActivity("GitHub Checklist")); // PR #11 CR r2 issue-4
+check("coreIsMetaActivity github preview tool NOT meta", !coreIsMetaActivity("github preview tool"));
+check("coreIsMetaActivity empty NOT meta", !coreIsMetaActivity(""));
+
+if (failed) {
+	console.error(`\n${failed} checks FAILED`);
+	process.exit(1);
+}
+console.log("\nall checks passed");

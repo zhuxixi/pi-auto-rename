@@ -1,0 +1,15 @@
+# runtime config generated on first load (per machine, never commit)
+auto-rename.json
+
+# local backups
+*.bak
+*.bak-*
+
+# dependencies
+node_modules/
+
+# OS noise
+.DS_Store
+
+# pi worktrees (github-issue-driven convention)
+.pi/
