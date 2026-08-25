@@ -81,6 +81,15 @@ export function isTrivialMessage(text: string): boolean {
   return TRIVIAL_MESSAGE.test(t);
 }
 
+/** Single-token slash commands (/autorename, /clear) are recorded as user
+ *  messages in pi sessions; they carry no intent and must not pollute the
+ *  recent context sent to the model (issue #1 CR). */
+const COMMAND_INVOCATION = /^\s*\/[a-z][a-z0-9-]*\s*$/i;
+
+export function isCommandInvocation(text: string): boolean {
+  return COMMAND_INVOCATION.test((text || "").trim());
+}
+
 export interface EarlySelection {
   text: string;
   /** True when at least one selected message is substantive (non-trivial). */
@@ -136,7 +145,7 @@ export function latestSelection(userMsgs: string[]): string {
     const m = userMsgs[i];
     if (seen.has(m)) continue;
     seen.add(m);
-    if (isTrivialMessage(m)) continue;
+    if (isTrivialMessage(m) || isCommandInvocation(m)) continue;
     picked.push(m);
   }
   if (!picked.length) return "";

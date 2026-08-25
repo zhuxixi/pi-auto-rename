@@ -16,6 +16,7 @@ import {
 	coreIsNonGoal,
 	earlyExcerpt,
 	earlySelection,
+	isCommandInvocation,
 	isTrivialMessage,
 	latestSelection,
 	looksLikeError,
@@ -220,6 +221,14 @@ check(
 	latest.startsWith("msg3-") && latest.endsWith("msg9-" + "x".repeat(290)),
 	latest.slice(0, 40) + " ... " + latest.slice(-40),
 );
+
+// ---- isCommandInvocation / latestSelection command filtering (issue #1 CR) ----
+check("isCommandInvocation /autorename", isCommandInvocation("/autorename"));
+check("isCommandInvocation /clear", isCommandInvocation("/clear"));
+check("isCommandInvocation path NOT command", !isCommandInvocation("/home/elling/git-repo"));
+check("isCommandInvocation command with args NOT single-token", !isCommandInvocation("/name foo"));
+check("isCommandInvocation empty", !isCommandInvocation(""));
+eq("latestSelection skips slash commands", latestSelection(["real1", "/autorename", "real2"]), "real1\n---\nreal2");
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);

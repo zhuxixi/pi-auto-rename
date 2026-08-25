@@ -275,10 +275,9 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
  * prevCore is passed empty and recent/prevTitle feed the prompt instead, so the
  * model re-derives with the latest context (issue #1).
  */
-async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = ""): Promise<string | null> {
+async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
-  const force = Boolean(recent);
   let user = (force
     ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
       "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
@@ -436,7 +435,7 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   // redact secrets before anything goes to the model
   const safeEarly = redact(early);
   const recent = opts.force ? redact(latestSelection(userMsgs)) : "";
-  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "");
+  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "", Boolean(opts.force));
   if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
   if (!locked && (coreIsNonGoal(coreRaw) || coreIsMetaActivity(coreRaw))) {
     debugLog(`core ${coreRaw.slice(0, 60)} rejected by quality gate; backed off`);
@@ -469,13 +468,23 @@ export default function autoRename(pi: ExtensionAPI): void {
   let sessionCtx: ExtensionContext | undefined;
   let running = false;
 
+  // Serialized runner shared by the periodic trigger and the /autorename
+  // command: force and periodic runs can never interleave (issue #1 CR).
+  const runSerialized = async (ctx: ExtensionContext, force: boolean): Promise<{ title?: string; reason: string } | null> => {
+    if (running) return null; // a run is already in flight
+    running = true;
+    try {
+      return await runAutoRename(pi, ctx, { force });
+    } finally {
+      running = false;
+    }
+  };
+
   const trigger = (force = false) => {
     if (!sessionCtx || running) return;
-    running = true;
-    void runAutoRename(pi, sessionCtx, { force })
-      .then((r) => debugLog(`run: ${r.reason}${r.title ? ` -> ${r.title}` : ""}`))
-      .catch((e) => debugLog(`run error: ${e instanceof Error ? e.message : String(e)}`))
-      .finally(() => { running = false; });
+    void runSerialized(sessionCtx, force)
+      .then((r) => debugLog(`run: ${r?.reason}${r?.title ? ` -> ${r.title}` : ""}`))
+      .catch((e) => debugLog(`run error: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   pi.on("session_start", async (_event, ctx) => {
@@ -505,7 +514,11 @@ export default function autoRename(pi: ExtensionAPI): void {
     description: "Force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context)",
     handler: async (_args, ctx) => {
       sessionCtx = ctx;
-      const r = await runAutoRename(pi, ctx, { force: true });
+      const r = await runSerialized(ctx, true);
+      if (!r) {
+        ctx.ui.notify("auto-rename: a rename is already in flight; try again shortly", "warning");
+        return;
+      }
       ctx.ui.notify(
         r.title ? `auto-rename: ${r.title} (${r.reason})` : `auto-rename: ${r.reason}`,
         r.title ? "info" : "warning",
