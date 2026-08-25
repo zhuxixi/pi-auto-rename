@@ -16,7 +16,9 @@ import {
 	coreIsNonGoal,
 	earlyExcerpt,
 	earlySelection,
+	isCommandInvocation,
 	isTrivialMessage,
+	latestSelection,
 	looksLikeError,
 	looksLikeResponse,
 	parseIso,
@@ -200,6 +202,33 @@ check("coreIsMetaActivity analyze issues meta", coreIsMetaActivity("analyze issu
 check("coreIsMetaActivity GitHub Checklist NOT meta (word boundary)", !coreIsMetaActivity("GitHub Checklist")); // PR #11 CR r2 issue-4
 check("coreIsMetaActivity github preview tool NOT meta", !coreIsMetaActivity("github preview tool"));
 check("coreIsMetaActivity empty NOT meta", !coreIsMetaActivity(""));
+
+// ---- latestSelection: recent-context tail scan (issue #1) ----
+eq("latestSelection empty", latestSelection([]), "");
+eq(
+	"latestSelection takes last 10 substantive",
+	latestSelection(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"]),
+	"m3\n---\nm4\n---\nm5\n---\nm6\n---\nm7\n---\nm8\n---\nm9\n---\nm10\n---\nm11\n---\nm12",
+);
+eq("latestSelection skips trivial in tail", latestSelection(["real1", "hello", "ok", "real2"]), "real1\n---\nreal2");
+eq("latestSelection dedups", latestSelection(["x", "x", "y"]), "x\n---\ny");
+eq("latestSelection all trivial -> empty", latestSelection(["hello", "ok", "收到"]), "");
+eq("latestSelection per-msg cap 300", latestSelection(["x".repeat(400)]).length, 300);
+const tenLong = Array.from({ length: 10 }, (_, i) => `msg${i}-` + "x".repeat(290));
+const latest = latestSelection(tenLong);
+check(
+	"latestSelection budget keeps most recent",
+	latest.startsWith("msg3-") && latest.endsWith("msg9-" + "x".repeat(290)),
+	latest.slice(0, 40) + " ... " + latest.slice(-40),
+);
+
+// ---- isCommandInvocation / latestSelection command filtering (issue #1 CR) ----
+check("isCommandInvocation /autorename", isCommandInvocation("/autorename"));
+check("isCommandInvocation /clear", isCommandInvocation("/clear"));
+check("isCommandInvocation path NOT command", !isCommandInvocation("/home/elling/git-repo"));
+check("isCommandInvocation command with args NOT single-token", !isCommandInvocation("/name foo"));
+check("isCommandInvocation empty", !isCommandInvocation(""));
+eq("latestSelection skips slash commands", latestSelection(["real1", "/autorename", "real2"]), "real1\n---\nreal2");
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);

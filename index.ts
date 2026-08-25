@@ -38,7 +38,7 @@
  *
  * Controls:
  *   * ~/.pi/agent/auto-rename.json  {enabled, model, firstAfterMin, repeatEveryMin, debug}
- *   * /autorename          force a rename now (bypasses cooldown + pause)
+ *   * /autorename          force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context)
  *   * /autorename-pause    pause this session
  *   * /autorename-resume   resume this session
  *   * /autorename-status   show current state
@@ -58,6 +58,7 @@ import {
   coreIsNonGoal,
   earlyExcerpt,
   earlySelection,
+  latestSelection,
   looksLikeError,
   looksLikeResponse,
   parseIso,
@@ -180,6 +181,23 @@ const SYSTEM_PROMPT =
   "Bad (NEVER): \"好的，没问题。作为你的技术专家我来帮你梳理…\" / \"I'll help you with…\"\n" +
   "Derive the title ONLY from the session's actual content; never reuse these example words.";
 
+// Force re-derive (/autorename) softens the anchor rule: the core stays
+// anchored on the original intent, but the RECENT CONTEXT may shift the
+// focus. Derived from SYSTEM_PROMPT by replacing the anchor sentence so the
+// two prompts can never drift apart; if the replace ever fails to match,
+// force silently falls back to the strict prompt (safe degradation).
+const FORCE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+  "- Derive the CORE GOAL ONLY from the ORIGINAL INTENT (the earliest user prompts). " +
+  "That is this session's stable focus — what this one session is accomplishing. Ignore " +
+  "everything else: later messages may contain pasted reference material, spec/design " +
+  "dumps, or content quoted from another session; those NEVER redefine the core. Never " +
+  "let a filename, spec heading, or pasted block become the core.\n",
+  "- Derive the CORE GOAL anchored on the ORIGINAL INTENT (the earliest user prompts). " +
+  "If the RECENT CONTEXT shows the session's actual focus has evolved beyond the " +
+  "original intent, reflect the CURRENT focus instead. Pasted reference material, " +
+  "spec/design dumps, or content quoted from another session must never become the core.\n",
+);
+
 interface LlmRuntime {
   ctx: ExtensionContext;
   model: any;
@@ -206,7 +224,7 @@ function extractText(response: any): string {
   return lines[lines.length - 1] ?? "";
 }
 
-async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal): Promise<string> {
+async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
   const messages: any[] = [{ role: "user", content: [{ type: "text", text: userContent }], timestamp: Date.now() }];
   const call = async (msgs: any[]): Promise<string> => {
     const controller = new AbortController();
@@ -217,7 +235,7 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
     try {
       const resp = await complete(
         rt.model,
-        { systemPrompt: SYSTEM_PROMPT, messages: msgs },
+        { systemPrompt, messages: msgs },
         {
           apiKey: rt.apiKey, headers: rt.headers, env: rt.env,
           maxTokens: MAX_NAME_TOKENS,
@@ -253,18 +271,32 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
  * Return the core-goal title, or null on hard failure. When prevCore is set
  * (the session already has an established, locked core) it is returned verbatim
  * with no model call — anchored refreshes are free, and the title only changes
- * if the anchor is dropped and re-derived.
+ * if the anchor is dropped and re-derived. On a forced re-derive (/autorename)
+ * prevCore is passed empty and recent/prevTitle feed the prompt instead, so the
+ * model re-derives with the latest context (issue #1).
  */
-async function generateCore(rt: LlmRuntime, early: string, prevCore: string): Promise<string | null> {
+async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
-  const user = "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. " +
+  let user = (force
+    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
+      "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
+    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
     "Output a concise noun-phrase title (3-5 English words or 6-12 Chinese chars): " +
     "what this one session is accomplishing. No punctuation, no repo name, no " +
-    "issue/PR numbers, no greetings/role-play.\n\n" +
-    "ORIGINAL INTENT:\n" + early;
+    "issue/PR numbers, no greetings/role-play.\n\n";
+  if (recent) {
+    user += "RECENT CONTEXT (the session's latest user messages — if the actual " +
+      "focus has evolved beyond the original intent, reflect the CURRENT focus):\n" +
+      recent + "\n\n";
+  }
+  if (prevTitle) {
+    user += "Previous title: " + prevTitle + "\n\n";
+  }
+  user += "ORIGINAL INTENT:\n" + early;
   const core = await llmOnce(rt, user,
-    "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.");
+    "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.",
+    undefined, force ? FORCE_SYSTEM_PROMPT : SYSTEM_PROMPT);
   return core || null;
 }
 
@@ -392,15 +424,18 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
 
   const prevCore = anchor ?? "";
   // The core locks only once derived from substantive intent; before that
-  // every refresh re-derives (cheap) so a junk core self-corrects.
-  const locked = Boolean(st.coreLocked && prevCore);
+  // every refresh re-derives (cheap) so a junk core self-corrects. A forced
+  // /autorename always unlocks: the model is called again with the latest
+  // context so a drifted title can be regenerated (issue #1).
+  const locked = !opts.force && Boolean(st.coreLocked && prevCore);
 
   const rt = await buildLlmRuntime(ctx);
   if (!rt) return { reason: "no usable model (registry auth failed)" };
 
   // redact secrets before anything goes to the model
   const safeEarly = redact(early);
-  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "");
+  const recent = opts.force ? redact(latestSelection(userMsgs)) : "";
+  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "", Boolean(opts.force));
   if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
   if (!locked && (coreIsNonGoal(coreRaw) || coreIsMetaActivity(coreRaw))) {
     debugLog(`core ${coreRaw.slice(0, 60)} rejected by quality gate; backed off`);
@@ -412,9 +447,9 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
 
   // Title is stable (core locked). Skip the write when nothing changed so the
   // title isn't churned every refresh.
-  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: locked || sel.substantive, paused: false, pausedReason: undefined };
+  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: locked || sel.substantive || opts.force, paused: false, pausedReason: undefined };
   if (title === st.lastSetTitle) {
-    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: locked || sel.substantive });
+    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: locked || sel.substantive || opts.force });
     return { title, reason: "unchanged" };
   }
 
@@ -433,13 +468,23 @@ export default function autoRename(pi: ExtensionAPI): void {
   let sessionCtx: ExtensionContext | undefined;
   let running = false;
 
+  // Serialized runner shared by the periodic trigger and the /autorename
+  // command: force and periodic runs can never interleave (issue #1 CR).
+  const runSerialized = async (ctx: ExtensionContext, force: boolean): Promise<{ title?: string; reason: string } | null> => {
+    if (running) return null; // a run is already in flight
+    running = true;
+    try {
+      return await runAutoRename(pi, ctx, { force });
+    } finally {
+      running = false;
+    }
+  };
+
   const trigger = (force = false) => {
     if (!sessionCtx || running) return;
-    running = true;
-    void runAutoRename(pi, sessionCtx, { force })
-      .then((r) => debugLog(`run: ${r.reason}${r.title ? ` -> ${r.title}` : ""}`))
-      .catch((e) => debugLog(`run error: ${e instanceof Error ? e.message : String(e)}`))
-      .finally(() => { running = false; });
+    void runSerialized(sessionCtx, force)
+      .then((r) => debugLog(`run: ${r?.reason}${r?.title ? ` -> ${r.title}` : ""}`))
+      .catch((e) => debugLog(`run error: ${e instanceof Error ? e.message : String(e)}`));
   };
 
   pi.on("session_start", async (_event, ctx) => {
@@ -466,10 +511,14 @@ export default function autoRename(pi: ExtensionAPI): void {
   pi.on("agent_settled", () => trigger(false));
 
   pi.registerCommand("autorename", {
-    description: "Force an auto-rename now (bypasses cooldown and pause)",
+    description: "Force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context)",
     handler: async (_args, ctx) => {
       sessionCtx = ctx;
-      const r = await runAutoRename(pi, ctx, { force: true });
+      const r = await runSerialized(ctx, true);
+      if (!r) {
+        ctx.ui.notify("auto-rename: a rename is already in flight; try again shortly", "warning");
+        return;
+      }
       ctx.ui.notify(
         r.title ? `auto-rename: ${r.title} (${r.reason})` : `auto-rename: ${r.reason}`,
         r.title ? "info" : "warning",

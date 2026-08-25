@@ -81,6 +81,15 @@ export function isTrivialMessage(text: string): boolean {
   return TRIVIAL_MESSAGE.test(t);
 }
 
+/** Single-token slash commands (/autorename, /clear) are recorded as user
+ *  messages in pi sessions; they carry no intent and must not pollute the
+ *  recent context sent to the model (issue #1 CR). */
+const COMMAND_INVOCATION = /^\s*\/[a-z][a-z0-9-]*\s*$/i;
+
+export function isCommandInvocation(text: string): boolean {
+  return COMMAND_INVOCATION.test((text || "").trim());
+}
+
 export interface EarlySelection {
   text: string;
   /** True when at least one selected message is substantive (non-trivial). */
@@ -116,6 +125,35 @@ export function earlySelection(userMsgs: string[]): EarlySelection {
     raw.push(m);
   }
   return { text: truncateMsgs(raw, 1200).join("\n---\n"), substantive: false };
+}
+
+export const LATEST_USER_MSGS = 10;  // recent-context prompts sent to the model on force
+export const LATEST_BUDGET = 2000;   // total char budget for recent context
+
+/**
+ * The last LATEST_USER_MSGS substantive prompts -> the session's RECENT
+ * CONTEXT, used only on forced re-derive (/autorename) so the model can see
+ * whether the session's actual focus has drifted from the original intent.
+ * Scanned from the tail backwards; throwaway openers are skipped and
+ * duplicates dropped. Empty when there is no substantive recent content.
+ */
+export function latestSelection(userMsgs: string[]): string {
+  if (!userMsgs.length) return "";
+  const seen = new Set<string>();
+  const picked: string[] = [];
+  for (let i = userMsgs.length - 1; i >= 0 && picked.length < LATEST_USER_MSGS; i -= 1) {
+    const m = userMsgs[i];
+    if (seen.has(m)) continue;
+    seen.add(m);
+    if (isTrivialMessage(m) || isCommandInvocation(m)) continue;
+    picked.push(m);
+  }
+  if (!picked.length) return "";
+  // picked is already most-recent-first (tail scan); truncateMsgs keeps the
+  // FRONT prefix on budget (the most recent), cutting the OLDEST tail.
+  const kept = truncateMsgs(picked, LATEST_BUDGET);
+  kept.reverse();   // back to transcript order for the model
+  return kept.join("\n---\n");
 }
 
 /** Thin wrapper kept for the original signature (existing tests/imports). */
