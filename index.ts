@@ -38,7 +38,7 @@
  *
  * Controls:
  *   * ~/.pi/agent/auto-rename.json  {enabled, model, firstAfterMin, repeatEveryMin, debug}
- *   * /autorename          force a rename now (bypasses cooldown + pause)
+ *   * /autorename          force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context)
  *   * /autorename-pause    pause this session
  *   * /autorename-resume   resume this session
  *   * /autorename-status   show current state

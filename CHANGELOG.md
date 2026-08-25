@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `/autorename` now truly regenerates the title: it bypasses the core
+  lock and re-derives with the latest user messages (recent context)
+  plus the previous title as prompt context, so a drifted or
+  inaccurate title can be corrected on demand (issue #1).
+
 ## [0.1.0] - 2026-08-21
 
 First public release, published to npm as `@zhuxixi/pi-auto-rename`.

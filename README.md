@@ -105,7 +105,7 @@ Edit the file and run `/reload` to apply.
 
 | Command               | Effect                                              |
 | --------------------- | --------------------------------------------------- |
-| `/autorename`         | Force a rename now (bypasses cooldown and pause)    |
+| `/autorename`         | Force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context) |
 | `/autorename-pause`   | Pause auto-rename for this session                  |
 | `/autorename-resume`  | Resume auto-rename for this session                 |
 | `/autorename-status`  | Show current state (title, core, locked, paused)    |
@@ -137,7 +137,10 @@ After editing, run `/reload` inside pi to hot-reload the extension.
 
 - **Titles stop updating**: check `/autorename-status` — the session
   may be paused (manual rename detected) or the core may be locked
-  (that's by design; `/autorename` forces a refresh).
+  (that's by design: periodic refreshes reuse the locked core without
+  a model call). `/autorename` forces a re-derive — it bypasses the
+  lock and includes the latest user messages, so a drifted title can
+  be regenerated.
 - **No rename happens at all**: check `enabled` in
   `~/.pi/agent/auto-rename.json`, and that the configured model is
   available in pi's model registry (`pi models`).
