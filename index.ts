@@ -58,6 +58,7 @@ import {
   coreIsNonGoal,
   earlyExcerpt,
   earlySelection,
+  latestSelection,
   looksLikeError,
   looksLikeResponse,
   parseIso,
@@ -253,16 +254,26 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
  * Return the core-goal title, or null on hard failure. When prevCore is set
  * (the session already has an established, locked core) it is returned verbatim
  * with no model call — anchored refreshes are free, and the title only changes
- * if the anchor is dropped and re-derived.
+ * if the anchor is dropped and re-derived. On a forced re-derive (/autorename)
+ * prevCore is passed empty and recent/prevTitle feed the prompt instead, so the
+ * model re-derives with the latest context (issue #1).
  */
-async function generateCore(rt: LlmRuntime, early: string, prevCore: string): Promise<string | null> {
+async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = ""): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
-  const user = "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. " +
+  let user = "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. " +
     "Output a concise noun-phrase title (3-5 English words or 6-12 Chinese chars): " +
     "what this one session is accomplishing. No punctuation, no repo name, no " +
-    "issue/PR numbers, no greetings/role-play.\n\n" +
-    "ORIGINAL INTENT:\n" + early;
+    "issue/PR numbers, no greetings/role-play.\n\n";
+  if (recent) {
+    user += "RECENT CONTEXT (the session's latest user messages — if the actual " +
+      "focus has evolved beyond the original intent, reflect the CURRENT focus):\n" +
+      recent + "\n\n";
+  }
+  if (prevTitle) {
+    user += "Previous title: " + prevTitle + "\n\n";
+  }
+  user += "ORIGINAL INTENT:\n" + early;
   const core = await llmOnce(rt, user,
     "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.");
   return core || null;
@@ -392,15 +403,18 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
 
   const prevCore = anchor ?? "";
   // The core locks only once derived from substantive intent; before that
-  // every refresh re-derives (cheap) so a junk core self-corrects.
-  const locked = Boolean(st.coreLocked && prevCore);
+  // every refresh re-derives (cheap) so a junk core self-corrects. A forced
+  // /autorename always unlocks: the model is called again with the latest
+  // context so a drifted title can be regenerated (issue #1).
+  const locked = !opts.force && Boolean(st.coreLocked && prevCore);
 
   const rt = await buildLlmRuntime(ctx);
   if (!rt) return { reason: "no usable model (registry auth failed)" };
 
   // redact secrets before anything goes to the model
   const safeEarly = redact(early);
-  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "");
+  const recent = opts.force ? redact(latestSelection(userMsgs)) : "";
+  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "");
   if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
   if (!locked && (coreIsNonGoal(coreRaw) || coreIsMetaActivity(coreRaw))) {
     debugLog(`core ${coreRaw.slice(0, 60)} rejected by quality gate; backed off`);
@@ -412,9 +426,9 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
 
   // Title is stable (core locked). Skip the write when nothing changed so the
   // title isn't churned every refresh.
-  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: locked || sel.substantive, paused: false, pausedReason: undefined };
+  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: locked || sel.substantive || opts.force, paused: false, pausedReason: undefined };
   if (title === st.lastSetTitle) {
-    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: locked || sel.substantive });
+    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: locked || sel.substantive || opts.force });
     return { title, reason: "unchanged" };
   }
 
@@ -466,7 +480,7 @@ export default function autoRename(pi: ExtensionAPI): void {
   pi.on("agent_settled", () => trigger(false));
 
   pi.registerCommand("autorename", {
-    description: "Force an auto-rename now (bypasses cooldown and pause)",
+    description: "Force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context)",
     handler: async (_args, ctx) => {
       sessionCtx = ctx;
       const r = await runAutoRename(pi, ctx, { force: true });
