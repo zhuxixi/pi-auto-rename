@@ -281,3 +281,36 @@ export function coreIsMetaActivity(core: string): boolean {
   if (!c) return false;
   return META_SUBJECT.test(c) && META_ACTION.test(c);
 }
+
+// ---- configurable title language (issue #3) ---------------------------------
+export type TitleLang = "auto" | "zh" | "en";
+
+/** Validate a config value: unknown/invalid languages fall back to "auto"
+ *  (the dual-language behavior), same fallback philosophy as the other
+ *  config keys in index.ts loadConfig. */
+export function resolveLang(value: unknown): TitleLang {
+  return value === "zh" || value === "en" || value === "auto" ? value : "auto";
+}
+
+export const LANG_PLACEHOLDER = "__LANG_RULE__";
+
+/** System-prompt HARD-RULES language line per lang (issue #3 spec). */
+export const LANG_RULES: Record<TitleLang, string> = {
+  auto: "- 3-5 words (English) or 6-12 characters (Chinese). Output ONLY the <core goal>.",
+  zh: "- Output the title in Chinese (6-12 汉字). English is allowed only for unavoidable technical terms or proper nouns.",
+  en: "- Output the title in English (3-5 words). No Chinese characters.",
+};
+
+/** generateCore user-prompt language line per lang (issue #3 spec). */
+export const USER_PROMPT_LANG_LINE: Record<TitleLang, string> = {
+  auto: "Output a concise noun-phrase title (3-5 English words or 6-12 Chinese chars): ",
+  zh: "Output a concise Chinese noun-phrase title (6-12 汉字; English only for technical terms): ",
+  en: "Output a concise English noun-phrase title (3-5 words, no Chinese): ",
+};
+
+/** Fill the language rule into a prompt template. When the placeholder is
+ *  absent the template is returned verbatim (safe degradation, same
+ *  philosophy as the force-prompt replace). */
+export function injectLang(template: string, lang: TitleLang): string {
+  return template.replace(LANG_PLACEHOLDER, LANG_RULES[lang]);
+}

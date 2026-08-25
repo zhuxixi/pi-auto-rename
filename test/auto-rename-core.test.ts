@@ -17,12 +17,16 @@ import {
 	earlyExcerpt,
 	earlySelection,
 	isCommandInvocation,
+	injectLang,
 	isTrivialMessage,
+	LANG_PLACEHOLDER,
+	LANG_RULES,
 	latestSelection,
 	looksLikeError,
 	looksLikeResponse,
 	parseIso,
 	redact,
+	resolveLang,
 	scanUserMessages,
 	truncateDisplay,
 } from "../lib/auto-rename-core";
@@ -229,6 +233,19 @@ check("isCommandInvocation path NOT command", !isCommandInvocation("/home/elling
 check("isCommandInvocation command with args NOT single-token", !isCommandInvocation("/name foo"));
 check("isCommandInvocation empty", !isCommandInvocation(""));
 eq("latestSelection skips slash commands", latestSelection(["real1", "/autorename", "real2"]), "real1\n---\nreal2");
+
+// ---- configurable title language (issue #3) ----
+eq("resolveLang auto", resolveLang("auto"), "auto");
+eq("resolveLang zh", resolveLang("zh"), "zh");
+eq("resolveLang en", resolveLang("en"), "en");
+eq("resolveLang uppercase falls back", resolveLang("EN"), "auto");
+eq("resolveLang junk falls back", resolveLang("Chinese"), "auto");
+eq("resolveLang number falls back", resolveLang(3), "auto");
+eq("resolveLang undefined falls back", resolveLang(undefined), "auto");
+eq("injectLang fills zh rule", injectLang("head " + LANG_PLACEHOLDER + " tail", "zh"), "head " + LANG_RULES.zh + " tail");
+eq("injectLang fills en rule", injectLang("head " + LANG_PLACEHOLDER + " tail", "en"), "head " + LANG_RULES.en + " tail");
+eq("injectLang fills auto rule", injectLang("head " + LANG_PLACEHOLDER + " tail", "auto"), "head " + LANG_RULES.auto + " tail");
+eq("injectLang no placeholder returns verbatim", injectLang("no placeholder", "zh"), "no placeholder");
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);
