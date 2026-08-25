@@ -181,6 +181,23 @@ const SYSTEM_PROMPT =
   "Bad (NEVER): \"好的，没问题。作为你的技术专家我来帮你梳理…\" / \"I'll help you with…\"\n" +
   "Derive the title ONLY from the session's actual content; never reuse these example words.";
 
+// Force re-derive (/autorename) softens the anchor rule: the core stays
+// anchored on the original intent, but the RECENT CONTEXT may shift the
+// focus. Derived from SYSTEM_PROMPT by replacing the anchor sentence so the
+// two prompts can never drift apart; if the replace ever fails to match,
+// force silently falls back to the strict prompt (safe degradation).
+const FORCE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+  "- Derive the CORE GOAL ONLY from the ORIGINAL INTENT (the earliest user prompts). " +
+  "That is this session's stable focus — what this one session is accomplishing. Ignore " +
+  "everything else: later messages may contain pasted reference material, spec/design " +
+  "dumps, or content quoted from another session; those NEVER redefine the core. Never " +
+  "let a filename, spec heading, or pasted block become the core.\n",
+  "- Derive the CORE GOAL anchored on the ORIGINAL INTENT (the earliest user prompts). " +
+  "If the RECENT CONTEXT shows the session's actual focus has evolved beyond the " +
+  "original intent, reflect the CURRENT focus instead. Pasted reference material, " +
+  "spec/design dumps, or content quoted from another session must never become the core.\n",
+);
+
 interface LlmRuntime {
   ctx: ExtensionContext;
   model: any;
@@ -207,7 +224,7 @@ function extractText(response: any): string {
   return lines[lines.length - 1] ?? "";
 }
 
-async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal): Promise<string> {
+async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
   const messages: any[] = [{ role: "user", content: [{ type: "text", text: userContent }], timestamp: Date.now() }];
   const call = async (msgs: any[]): Promise<string> => {
     const controller = new AbortController();
@@ -218,7 +235,7 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
     try {
       const resp = await complete(
         rt.model,
-        { systemPrompt: SYSTEM_PROMPT, messages: msgs },
+        { systemPrompt, messages: msgs },
         {
           apiKey: rt.apiKey, headers: rt.headers, env: rt.env,
           maxTokens: MAX_NAME_TOKENS,
@@ -261,7 +278,11 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
 async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = ""): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
-  let user = "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. " +
+  const force = Boolean(recent);
+  let user = (force
+    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
+      "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
+    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
     "Output a concise noun-phrase title (3-5 English words or 6-12 Chinese chars): " +
     "what this one session is accomplishing. No punctuation, no repo name, no " +
     "issue/PR numbers, no greetings/role-play.\n\n";
@@ -275,7 +296,8 @@ async function generateCore(rt: LlmRuntime, early: string, prevCore: string, rec
   }
   user += "ORIGINAL INTENT:\n" + early;
   const core = await llmOnce(rt, user,
-    "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.");
+    "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.",
+    undefined, force ? FORCE_SYSTEM_PROMPT : SYSTEM_PROMPT);
   return core || null;
 }
 
