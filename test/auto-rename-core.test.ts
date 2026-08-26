@@ -16,6 +16,7 @@ import {
 	coreIsNonGoal,
 	earlyExcerpt,
 	earlySelection,
+	FORCE_SYSTEM_PROMPT_TEMPLATE,
 	isCommandInvocation,
 	injectLang,
 	isTrivialMessage,
@@ -28,6 +29,7 @@ import {
 	redact,
 	resolveLang,
 	scanUserMessages,
+	SYSTEM_PROMPT_TEMPLATE,
 	truncateDisplay,
 } from "../lib/auto-rename-core";
 
@@ -246,6 +248,21 @@ eq("injectLang fills zh rule", injectLang("head " + LANG_PLACEHOLDER + " tail", 
 eq("injectLang fills en rule", injectLang("head " + LANG_PLACEHOLDER + " tail", "en"), "head " + LANG_RULES.en + " tail");
 eq("injectLang fills auto rule", injectLang("head " + LANG_PLACEHOLDER + " tail", "auto"), "head " + LANG_RULES.auto + " tail");
 eq("injectLang no placeholder returns verbatim", injectLang("no placeholder", "zh"), "no placeholder");
+
+// ---- prompt templates with lang placeholder (issue #3) ----
+const placeholderCount = (s: string): number => s.split(LANG_PLACEHOLDER).length - 1;
+eq("SYSTEM template placeholder exactly once", placeholderCount(SYSTEM_PROMPT_TEMPLATE), 1);
+eq("FORCE template placeholder exactly once", placeholderCount(FORCE_SYSTEM_PROMPT_TEMPLATE), 1);
+check("SYSTEM template keeps strict anchor", SYSTEM_PROMPT_TEMPLATE.includes("Derive the CORE GOAL ONLY from the ORIGINAL INTENT"));
+check("FORCE template drops strict anchor", !FORCE_SYSTEM_PROMPT_TEMPLATE.includes("Derive the CORE GOAL ONLY from the ORIGINAL INTENT"));
+check("FORCE template carries soft anchor", FORCE_SYSTEM_PROMPT_TEMPLATE.includes("Derive the CORE GOAL anchored on the ORIGINAL INTENT"));
+check("FORCE template differs from SYSTEM", FORCE_SYSTEM_PROMPT_TEMPLATE !== SYSTEM_PROMPT_TEMPLATE);
+check("FORCE template keeps non-anchor lines verbatim", FORCE_SYSTEM_PROMPT_TEMPLATE.includes("You LABEL the session, you do NOT participate"));
+check("SYSTEM template keeps non-anchor lines verbatim", SYSTEM_PROMPT_TEMPLATE.includes("Never start with: 好的/收到/没问题"));
+for (const lang of ["auto", "zh", "en"] as const) {
+  const filled = injectLang(SYSTEM_PROMPT_TEMPLATE, lang);
+  check(`injectLang(${lang}) fills the real template`, !filled.includes(LANG_PLACEHOLDER) && filled.includes(LANG_RULES[lang]));
+}
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);
