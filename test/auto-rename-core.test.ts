@@ -9,6 +9,7 @@
  */
 import {
 	blockText,
+	buildUserPrompt,
 	capTitle,
 	composeTitle,
 	coreFromTitle,
@@ -29,6 +30,7 @@ import {
 	redact,
 	resolveLang,
 	scanUserMessages,
+	systemPromptFor,
 	SYSTEM_PROMPT_TEMPLATE,
 	truncateDisplay,
 } from "../lib/auto-rename-core";
@@ -263,6 +265,52 @@ for (const lang of ["auto", "zh", "en"] as const) {
   const filled = injectLang(SYSTEM_PROMPT_TEMPLATE, lang);
   check(`injectLang(${lang}) fills the real template`, !filled.includes(LANG_PLACEHOLDER) && filled.includes(LANG_RULES[lang]));
 }
+
+// ---- glue-layer prompt construction (issue #3 final review) ----
+// Golden string: the exact pre-issue-#3 SYSTEM_PROMPT. lang="auto" must
+// produce this byte-for-byte — pins backward compatibility.
+const GOLDEN_AUTO_SYSTEM_PROMPT =
+  "You are an automatic TITLE generator. Your ENTIRE output is ONE short title " +
+  "naming what this session is about (its CORE GOAL).\n" +
+  "HARD RULES:\n" +
+  "- Derive the CORE GOAL ONLY from the ORIGINAL INTENT (the earliest user prompts). " +
+  "That is this session's stable focus — what this one session is accomplishing. Ignore " +
+  "everything else: later messages may contain pasted reference material, spec/design " +
+  "dumps, or content quoted from another session; those NEVER redefine the core. Never " +
+  "let a filename, spec heading, or pasted block become the core.\n" +
+  "- You LABEL the session, you do NOT participate. Never answer, greet, advise, " +
+  "or role-play the conversation.\n" +
+  "- Output a concise NOUN PHRASE (like a document title / folder name), NOT a sentence.\n" +
+  "- The CORE GOAL is the session's stable focus, NOT the issue/PR title verbatim and NOT " +
+  "transient activity like 'code review', 'CR polling', 'babysit', 'monitoring'. Two " +
+  "sessions on the same issue must have DIFFERENT cores reflecting their different work.\n" +
+  "- Never start with: 好的/收到/没问题/当然/作为/我来/我会/我们可以/让我们/我将/感谢/" +
+  "理解/明白/您好. No greetings, no first-person verbs, no advice.\n" +
+  "- No sentence-ending punctuation (。.！？!). Do NOT include the repo name or any " +
+  "issue/PR numbers (#123, PR#45) — those are not part of the title.\n" +
+  "- No transient counters (round/attempt/pass/try/retry N, 第N轮).\n" +
+  "- 3-5 words (English) or 6-12 characters (Chinese). Output ONLY the <core goal>.\n" +
+  "If the session is non-technical (business/strategy/writing), still output ONLY a " +
+  "short topic label, never advice or a response.\n" +
+  "Good: \"登录重定向修复\" / \"配置同步方案\" / \"Fix login redirect\"\n" +
+  "Bad (NEVER): \"好的，没问题。作为你的技术专家我来帮你梳理…\" / \"I'll help you with…\"\n" +
+  "Derive the title ONLY from the session's actual content; never reuse these example words.";
+eq("systemPromptFor auto golden (byte-identical to pre-issue#3)", systemPromptFor(false, "auto"), GOLDEN_AUTO_SYSTEM_PROMPT);
+check("systemPromptFor force differs from strict", systemPromptFor(true, "auto") !== GOLDEN_AUTO_SYSTEM_PROMPT);
+check("systemPromptFor force carries soft anchor", systemPromptFor(true, "auto").includes("Derive the CORE GOAL anchored on the ORIGINAL INTENT"));
+check("systemPromptFor zh fills zh rule", systemPromptFor(false, "zh").includes(LANG_RULES.zh));
+eq("buildUserPrompt auto strict golden",
+  buildUserPrompt(false, "auto", "hello world", "", ""),
+  "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. " +
+  "Output a concise noun-phrase title (3-5 English words or 6-12 Chinese chars): " +
+  "what this one session is accomplishing. No punctuation, no repo name, no " +
+  "issue/PR numbers, no greetings/role-play.\n\n" +
+  "ORIGINAL INTENT:\nhello world");
+check("buildUserPrompt force wording", buildUserPrompt(true, "auto", "hello", "", "").includes("anchored on the ORIGINAL INTENT"));
+check("buildUserPrompt zh line", buildUserPrompt(false, "zh", "hello", "", "").includes("Chinese noun-phrase title (6-12 汉字"));
+check("buildUserPrompt en line", buildUserPrompt(false, "en", "hello", "", "").includes("English noun-phrase title (3-5 words, no Chinese)"));
+check("buildUserPrompt recent block", buildUserPrompt(false, "auto", "hello", "recent msg", "").includes("RECENT CONTEXT (the session's latest user messages") && buildUserPrompt(false, "auto", "hello", "recent msg", "").includes("recent msg"));
+check("buildUserPrompt prevTitle block", buildUserPrompt(false, "auto", "hello", "", "Old title").includes("Previous title: Old title"));
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);

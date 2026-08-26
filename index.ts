@@ -65,11 +65,9 @@ import {
   redact,
   scanUserMessages,
   truncateDisplay,
-  FORCE_SYSTEM_PROMPT_TEMPLATE,
-  SYSTEM_PROMPT_TEMPLATE,
-  USER_PROMPT_LANG_LINE,
-  injectLang,
+  buildUserPrompt,
   resolveLang,
+  systemPromptFor,
   type TitleLang,
 } from "./lib/auto-rename-core";
 
@@ -189,7 +187,7 @@ function extractText(response: any): string {
   return lines[lines.length - 1] ?? "";
 }
 
-async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal, systemPrompt: string = injectLang(SYSTEM_PROMPT_TEMPLATE, "auto")): Promise<string> {
+async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal, systemPrompt: string = systemPromptFor(false, "auto")): Promise<string> {
   const messages: any[] = [{ role: "user", content: [{ type: "text", text: userContent }], timestamp: Date.now() }];
   const call = async (msgs: any[]): Promise<string> => {
     const controller = new AbortController();
@@ -243,25 +241,10 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
 async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false, lang: TitleLang): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
-  let user = (force
-    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
-      "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
-    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
-    USER_PROMPT_LANG_LINE[lang] +
-    "what this one session is accomplishing. No punctuation, no repo name, no " +
-    "issue/PR numbers, no greetings/role-play.\n\n";
-  if (recent) {
-    user += "RECENT CONTEXT (the session's latest user messages — if the actual " +
-      "focus has evolved beyond the original intent, reflect the CURRENT focus):\n" +
-      recent + "\n\n";
-  }
-  if (prevTitle) {
-    user += "Previous title: " + prevTitle + "\n\n";
-  }
-  user += "ORIGINAL INTENT:\n" + early;
+  const user = buildUserPrompt(force, lang, early, recent, prevTitle);
   const core = await llmOnce(rt, user,
     "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.",
-    undefined, injectLang(force ? FORCE_SYSTEM_PROMPT_TEMPLATE : SYSTEM_PROMPT_TEMPLATE, lang));
+    undefined, systemPromptFor(force, lang));
   return core || null;
 }
 

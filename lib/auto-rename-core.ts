@@ -362,3 +362,34 @@ export const FORCE_SYSTEM_PROMPT_TEMPLATE = SYSTEM_PROMPT_TEMPLATE.replace(
   "original intent, reflect the CURRENT focus instead. Pasted reference material, " +
   "spec/design dumps, or content quoted from another session must never become the core.\n",
 );
+
+/** System prompt for a run: template selected by force, language rule filled. */
+export function systemPromptFor(force: boolean, lang: TitleLang): string {
+  return injectLang(force ? FORCE_SYSTEM_PROMPT_TEMPLATE : SYSTEM_PROMPT_TEMPLATE, lang);
+}
+
+/**
+ * The generateCore user prompt: original-intent derivation instruction,
+ * language line, optional RECENT CONTEXT / Previous title blocks, then the
+ * ORIGINAL INTENT excerpt. Moved here from index.ts (issue #3 final review)
+ * so the glue wiring is unit-testable.
+ */
+export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, recent: string, prevTitle: string): string {
+  let user = (force
+    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
+      "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
+    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
+    USER_PROMPT_LANG_LINE[lang] +
+    "what this one session is accomplishing. No punctuation, no repo name, no " +
+    "issue/PR numbers, no greetings/role-play.\n\n";
+  if (recent) {
+    user += "RECENT CONTEXT (the session's latest user messages — if the actual " +
+      "focus has evolved beyond the original intent, reflect the CURRENT focus):\n" +
+      recent + "\n\n";
+  }
+  if (prevTitle) {
+    user += "Previous title: " + prevTitle + "\n\n";
+  }
+  user += "ORIGINAL INTENT:\n" + early;
+  return user;
+}
