@@ -37,7 +37,7 @@
  * ({lastRunEpoch, lastSetTitle, lastCore, paused, pausedReason}).
  *
  * Controls:
- *   * ~/.pi/agent/auto-rename.json  {enabled, model, firstAfterMin, repeatEveryMin, debug}
+ *   * ~/.pi/agent/auto-rename.json  {enabled, model, firstAfterMin, repeatEveryMin, maxCoreWidth, debug, lang}
  *   * /autorename          force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context)
  *   * /autorename-pause    pause this session
  *   * /autorename-resume   resume this session
@@ -65,6 +65,12 @@ import {
   redact,
   scanUserMessages,
   truncateDisplay,
+  FORCE_SYSTEM_PROMPT_TEMPLATE,
+  SYSTEM_PROMPT_TEMPLATE,
+  USER_PROMPT_LANG_LINE,
+  injectLang,
+  resolveLang,
+  type TitleLang,
 } from "./lib/auto-rename-core";
 
 // Re-export the pure core so existing imports from this entry keep working.
@@ -80,6 +86,7 @@ interface AutoRenameConfig {
   repeatEveryMin: number;   // re-rename cadence after the first rename
   maxCoreWidth: number;     // core-goal cap in display columns (CJK counts 2)
   debug: boolean;
+  lang: TitleLang;          // forced title language (issue #3)
 }
 
 const DEFAULT_CONFIG: AutoRenameConfig = {
@@ -89,6 +96,7 @@ const DEFAULT_CONFIG: AutoRenameConfig = {
   repeatEveryMin: 3,
   maxCoreWidth: MAX_CORE_WIDTH,
   debug: false,
+  lang: "auto",
 };
 
 const MAX_NAME_TOKENS = 1024;   // generous: thinking-mode models burn tokens on reasoning
@@ -122,6 +130,7 @@ function loadConfig(): AutoRenameConfig {
           repeatEveryMin: typeof raw.repeatEveryMin === "number" && raw.repeatEveryMin >= 1 ? raw.repeatEveryMin : DEFAULT_CONFIG.repeatEveryMin,
           maxCoreWidth: typeof raw.maxCoreWidth === "number" && raw.maxCoreWidth >= 8 ? raw.maxCoreWidth : DEFAULT_CONFIG.maxCoreWidth,
           debug: typeof raw.debug === "boolean" ? raw.debug : DEFAULT_CONFIG.debug,
+          lang: resolveLang(raw.lang),
         };
         configMtime = mtime;
       }
@@ -154,50 +163,6 @@ function firstTimestamp(file: string, maxLines = 64): number | null {
 }
 
 // ---- LLM call -----------------------------------------------------------------
-const SYSTEM_PROMPT =
-  "You are an automatic TITLE generator. Your ENTIRE output is ONE short title " +
-  "naming what this session is about (its CORE GOAL).\n" +
-  "HARD RULES:\n" +
-  "- Derive the CORE GOAL ONLY from the ORIGINAL INTENT (the earliest user prompts). " +
-  "That is this session's stable focus — what this one session is accomplishing. Ignore " +
-  "everything else: later messages may contain pasted reference material, spec/design " +
-  "dumps, or content quoted from another session; those NEVER redefine the core. Never " +
-  "let a filename, spec heading, or pasted block become the core.\n" +
-  "- You LABEL the session, you do NOT participate. Never answer, greet, advise, " +
-  "or role-play the conversation.\n" +
-  "- Output a concise NOUN PHRASE (like a document title / folder name), NOT a sentence.\n" +
-  "- The CORE GOAL is the session's stable focus, NOT the issue/PR title verbatim and NOT " +
-  "transient activity like 'code review', 'CR polling', 'babysit', 'monitoring'. Two " +
-  "sessions on the same issue must have DIFFERENT cores reflecting their different work.\n" +
-  "- Never start with: 好的/收到/没问题/当然/作为/我来/我会/我们可以/让我们/我将/感谢/" +
-  "理解/明白/您好. No greetings, no first-person verbs, no advice.\n" +
-  "- No sentence-ending punctuation (。.！？!). Do NOT include the repo name or any " +
-  "issue/PR numbers (#123, PR#45) — those are not part of the title.\n" +
-  "- No transient counters (round/attempt/pass/try/retry N, 第N轮).\n" +
-  "- 3-5 words (English) or 6-12 characters (Chinese). Output ONLY the <core goal>.\n" +
-  "If the session is non-technical (business/strategy/writing), still output ONLY a " +
-  "short topic label, never advice or a response.\n" +
-  "Good: \"登录重定向修复\" / \"配置同步方案\" / \"Fix login redirect\"\n" +
-  "Bad (NEVER): \"好的，没问题。作为你的技术专家我来帮你梳理…\" / \"I'll help you with…\"\n" +
-  "Derive the title ONLY from the session's actual content; never reuse these example words.";
-
-// Force re-derive (/autorename) softens the anchor rule: the core stays
-// anchored on the original intent, but the RECENT CONTEXT may shift the
-// focus. Derived from SYSTEM_PROMPT by replacing the anchor sentence so the
-// two prompts can never drift apart; if the replace ever fails to match,
-// force silently falls back to the strict prompt (safe degradation).
-const FORCE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
-  "- Derive the CORE GOAL ONLY from the ORIGINAL INTENT (the earliest user prompts). " +
-  "That is this session's stable focus — what this one session is accomplishing. Ignore " +
-  "everything else: later messages may contain pasted reference material, spec/design " +
-  "dumps, or content quoted from another session; those NEVER redefine the core. Never " +
-  "let a filename, spec heading, or pasted block become the core.\n",
-  "- Derive the CORE GOAL anchored on the ORIGINAL INTENT (the earliest user prompts). " +
-  "If the RECENT CONTEXT shows the session's actual focus has evolved beyond the " +
-  "original intent, reflect the CURRENT focus instead. Pasted reference material, " +
-  "spec/design dumps, or content quoted from another session must never become the core.\n",
-);
-
 interface LlmRuntime {
   ctx: ExtensionContext;
   model: any;
@@ -224,7 +189,7 @@ function extractText(response: any): string {
   return lines[lines.length - 1] ?? "";
 }
 
-async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal, systemPrompt: string = SYSTEM_PROMPT): Promise<string> {
+async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: string, signal?: AbortSignal, systemPrompt: string = injectLang(SYSTEM_PROMPT_TEMPLATE, "auto")): Promise<string> {
   const messages: any[] = [{ role: "user", content: [{ type: "text", text: userContent }], timestamp: Date.now() }];
   const call = async (msgs: any[]): Promise<string> => {
     const controller = new AbortController();
@@ -275,14 +240,14 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
  * prevCore is passed empty and recent/prevTitle feed the prompt instead, so the
  * model re-derives with the latest context (issue #1).
  */
-async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false): Promise<string | null> {
+async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false, lang: TitleLang): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
   let user = (force
     ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
       "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
     : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
-    "Output a concise noun-phrase title (3-5 English words or 6-12 Chinese chars): " +
+    USER_PROMPT_LANG_LINE[lang] +
     "what this one session is accomplishing. No punctuation, no repo name, no " +
     "issue/PR numbers, no greetings/role-play.\n\n";
   if (recent) {
@@ -296,7 +261,7 @@ async function generateCore(rt: LlmRuntime, early: string, prevCore: string, rec
   user += "ORIGINAL INTENT:\n" + early;
   const core = await llmOnce(rt, user,
     "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.",
-    undefined, force ? FORCE_SYSTEM_PROMPT : SYSTEM_PROMPT);
+    undefined, injectLang(force ? FORCE_SYSTEM_PROMPT_TEMPLATE : SYSTEM_PROMPT_TEMPLATE, lang));
   return core || null;
 }
 
@@ -435,7 +400,7 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   // redact secrets before anything goes to the model
   const safeEarly = redact(early);
   const recent = opts.force ? redact(latestSelection(userMsgs)) : "";
-  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "", Boolean(opts.force));
+  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "", Boolean(opts.force), config.lang);
   if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
   if (!locked && (coreIsNonGoal(coreRaw) || coreIsMetaActivity(coreRaw))) {
     debugLog(`core ${coreRaw.slice(0, 60)} rejected by quality gate; backed off`);
