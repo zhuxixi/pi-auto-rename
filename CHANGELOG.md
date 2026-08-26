@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `lang` config (`"auto"` / `"zh"` / `"en"`): forces the title language
+  for newly generated and `/autorename`-forced titles; invalid values
+  fall back to `"auto"` (issue #3).
+
 ### Fixed
 
 - `/autorename` now truly regenerates the title: it bypasses the core

@@ -98,6 +98,7 @@ The config file is created automatically on first load at
 | `repeatEveryMin`| `3`                         | Re-rename cadence after the first rename       |
 | `maxCoreWidth`  | `24`                        | Core-goal cap in display columns (CJK counts 2) |
 | `debug`         | `false`                     | Verbose logging to stderr                      |
+| `lang`          | `"auto"`                    | Forced title language: `"zh"` / `"en"` / `"auto"` (default — follows the session's original intent). Invalid values fall back to `"auto"`. Applies to newly generated and `/autorename`-forced titles only |
 
 Edit the file and run `/reload` to apply.
 
@@ -117,7 +118,8 @@ Edit the file and run `/reload` to apply.
 2. It scans the transcript for the first substantive user prompts
    (greetings/acks skipped) — the session's ORIGINAL INTENT.
 3. Secrets are redacted, then the excerpt is sent to the configured
-   model with a strict title-generation prompt.
+   model with a strict title-generation prompt; the configured `lang`
+   forces the title language (`"auto"` follows the original intent).
 4. The output passes quality gates (not a sentence, not a response,
    not a procedural label), is capped to `maxCoreWidth` display
    columns, and applied via `pi.setSessionName()`.

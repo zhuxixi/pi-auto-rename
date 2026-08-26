@@ -281,3 +281,115 @@ export function coreIsMetaActivity(core: string): boolean {
   if (!c) return false;
   return META_SUBJECT.test(c) && META_ACTION.test(c);
 }
+
+// ---- configurable title language (issue #3) ---------------------------------
+export type TitleLang = "auto" | "zh" | "en";
+
+/** Validate a config value: unknown/invalid languages fall back to "auto"
+ *  (the dual-language behavior), same fallback philosophy as the other
+ *  config keys in index.ts loadConfig. */
+export function resolveLang(value: unknown): TitleLang {
+  return value === "zh" || value === "en" || value === "auto" ? value : "auto";
+}
+
+export const LANG_PLACEHOLDER = "__LANG_RULE__";
+
+/** System-prompt HARD-RULES language line per lang (issue #3 spec). */
+export const LANG_RULES: Record<TitleLang, string> = {
+  auto: "- 3-5 words (English) or 6-12 characters (Chinese). Output ONLY the <core goal>.",
+  zh: "- Output the title in Chinese (6-12 汉字). English is allowed only for unavoidable technical terms or proper nouns.",
+  en: "- Output the title in English (3-5 words). No Chinese characters.",
+};
+
+/** generateCore user-prompt language line per lang (issue #3 spec). */
+export const USER_PROMPT_LANG_LINE: Record<TitleLang, string> = {
+  auto: "Output a concise noun-phrase title (3-5 English words or 6-12 Chinese chars): ",
+  zh: "Output a concise Chinese noun-phrase title (6-12 汉字; English only for technical terms): ",
+  en: "Output a concise English noun-phrase title (3-5 words, no Chinese): ",
+};
+
+/** Fill the language rule into a prompt template. When the placeholder is
+ *  absent the template is returned verbatim (safe degradation, same
+ *  philosophy as the force-prompt replace). */
+export function injectLang(template: string, lang: TitleLang): string {
+  return template.replace(LANG_PLACEHOLDER, LANG_RULES[lang]);
+}
+
+/** SYSTEM_PROMPT with the language rule line replaced by LANG_PLACEHOLDER.
+ *  Moved here from index.ts (issue #3) so the lang wiring is pure and
+ *  testable; every line except the placeholder is verbatim-identical to the
+ *  original prompt, including the strict anchor sentence. */
+export const SYSTEM_PROMPT_TEMPLATE =
+  "You are an automatic TITLE generator. Your ENTIRE output is ONE short title " +
+  "naming what this session is about (its CORE GOAL).\n" +
+  "HARD RULES:\n" +
+  "- Derive the CORE GOAL ONLY from the ORIGINAL INTENT (the earliest user prompts). " +
+  "That is this session's stable focus — what this one session is accomplishing. Ignore " +
+  "everything else: later messages may contain pasted reference material, spec/design " +
+  "dumps, or content quoted from another session; those NEVER redefine the core. Never " +
+  "let a filename, spec heading, or pasted block become the core.\n" +
+  "- You LABEL the session, you do NOT participate. Never answer, greet, advise, " +
+  "or role-play the conversation.\n" +
+  "- Output a concise NOUN PHRASE (like a document title / folder name), NOT a sentence.\n" +
+  "- The CORE GOAL is the session's stable focus, NOT the issue/PR title verbatim and NOT " +
+  "transient activity like 'code review', 'CR polling', 'babysit', 'monitoring'. Two " +
+  "sessions on the same issue must have DIFFERENT cores reflecting their different work.\n" +
+  "- Never start with: 好的/收到/没问题/当然/作为/我来/我会/我们可以/让我们/我将/感谢/" +
+  "理解/明白/您好. No greetings, no first-person verbs, no advice.\n" +
+  "- No sentence-ending punctuation (。.！？!). Do NOT include the repo name or any " +
+  "issue/PR numbers (#123, PR#45) — those are not part of the title.\n" +
+  "- No transient counters (round/attempt/pass/try/retry N, 第N轮).\n" +
+  LANG_PLACEHOLDER + "\n" +
+  "If the session is non-technical (business/strategy/writing), still output ONLY a " +
+  "short topic label, never advice or a response.\n" +
+  "Good: \"登录重定向修复\" / \"配置同步方案\" / \"Fix login redirect\"\n" +
+  "Bad (NEVER): \"好的，没问题。作为你的技术专家我来帮你梳理…\" / \"I'll help you with…\"\n" +
+  "Derive the title ONLY from the session's actual content; never reuse these example words.";
+
+/** Derived from SYSTEM_PROMPT_TEMPLATE by replacing the strict anchor sentence
+ *  with the soft (force) anchor — the same derivation index.ts used, kept
+ *  intact so the two prompts can never drift apart. If the replace ever fails
+ *  to match, force silently falls back to the strict template (safe
+ *  degradation, unchanged from before). */
+export const FORCE_SYSTEM_PROMPT_TEMPLATE = SYSTEM_PROMPT_TEMPLATE.replace(
+  "- Derive the CORE GOAL ONLY from the ORIGINAL INTENT (the earliest user prompts). " +
+  "That is this session's stable focus — what this one session is accomplishing. Ignore " +
+  "everything else: later messages may contain pasted reference material, spec/design " +
+  "dumps, or content quoted from another session; those NEVER redefine the core. Never " +
+  "let a filename, spec heading, or pasted block become the core.\n",
+  "- Derive the CORE GOAL anchored on the ORIGINAL INTENT (the earliest user prompts). " +
+  "If the RECENT CONTEXT shows the session's actual focus has evolved beyond the " +
+  "original intent, reflect the CURRENT focus instead. Pasted reference material, " +
+  "spec/design dumps, or content quoted from another session must never become the core.\n",
+);
+
+/** System prompt for a run: template selected by force, language rule filled. */
+export function systemPromptFor(force: boolean, lang: TitleLang): string {
+  return injectLang(force ? FORCE_SYSTEM_PROMPT_TEMPLATE : SYSTEM_PROMPT_TEMPLATE, lang);
+}
+
+/**
+ * The generateCore user prompt: original-intent derivation instruction,
+ * language line, optional RECENT CONTEXT / Previous title blocks, then the
+ * ORIGINAL INTENT excerpt. Moved here from index.ts (issue #3 final review)
+ * so the glue wiring is unit-testable.
+ */
+export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, recent: string, prevTitle: string): string {
+  let user = (force
+    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
+      "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
+    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
+    USER_PROMPT_LANG_LINE[lang] +
+    "what this one session is accomplishing. No punctuation, no repo name, no " +
+    "issue/PR numbers, no greetings/role-play.\n\n";
+  if (recent) {
+    user += "RECENT CONTEXT (the session's latest user messages — if the actual " +
+      "focus has evolved beyond the original intent, reflect the CURRENT focus):\n" +
+      recent + "\n\n";
+  }
+  if (prevTitle) {
+    user += "Previous title: " + prevTitle + "\n\n";
+  }
+  user += "ORIGINAL INTENT:\n" + early;
+  return user;
+}
