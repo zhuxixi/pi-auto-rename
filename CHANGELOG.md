@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `/autorename` no longer bails with an empty rejection when the
+  quality gate fires: the meta filter is skipped on force and non-goal
+  cores are accepted with a warning that names the rule and the
+  rejected core; background renames stay strict (issue #5).
+
 ## [0.2.0] - 2026-08-26
 
 ### Added
