@@ -27,6 +27,7 @@ import {
 	looksLikeError,
 	looksLikeResponse,
 	parseIso,
+	qualityGate,
 	redact,
 	resolveLang,
 	scanUserMessages,
@@ -311,6 +312,22 @@ check("buildUserPrompt zh line", buildUserPrompt(false, "zh", "hello", "", "").i
 check("buildUserPrompt en line", buildUserPrompt(false, "en", "hello", "", "").includes("English noun-phrase title (3-5 words, no Chinese)"));
 check("buildUserPrompt recent block", buildUserPrompt(false, "auto", "hello", "recent msg", "").includes("RECENT CONTEXT (the session's latest user messages") && buildUserPrompt(false, "auto", "hello", "recent msg", "").includes("recent msg"));
 check("buildUserPrompt prevTitle block", buildUserPrompt(false, "auto", "hello", "", "Old title").includes("Previous title: Old title"));
+
+// ---- qualityGate: force-split gate policy (issue #5) ----
+const q1 = qualityGate("方案确认", false);
+check("qualityGate background non-goal rejects", q1.action === "reject" && q1.rule === "coreIsNonGoal");
+const q2 = qualityGate("Issue list triage", false);
+check("qualityGate background meta rejects", q2.action === "reject" && q2.rule === "coreIsMetaActivity");
+const q3 = qualityGate("方案确认", true);
+check("qualityGate force non-goal accepts with warning", q3.action === "accept-with-warning" && q3.rule === "coreIsNonGoal");
+check("qualityGate force meta accepts", qualityGate("review github issue", true).action === "accept");
+check("qualityGate force issue 分析 accepts", qualityGate("issue 分析", true).action === "accept");
+check("qualityGate background clean accepts", qualityGate("修复登录越界", false).action === "accept");
+check("qualityGate force clean accepts", qualityGate("修复登录越界", true).action === "accept");
+check("qualityGate background fix login bug accepts", qualityGate("fix login bug", false).action === "accept");
+check("qualityGate force fix login bug accepts", qualityGate("fix login bug", true).action === "accept");
+check("qualityGate background empty accepts", qualityGate("", false).action === "accept");
+check("qualityGate force empty accepts", qualityGate("", true).action === "accept");
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);

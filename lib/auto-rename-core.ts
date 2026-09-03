@@ -282,6 +282,33 @@ export function coreIsMetaActivity(core: string): boolean {
   return META_SUBJECT.test(c) && META_ACTION.test(c);
 }
 
+export type QualityGateRule = "coreIsNonGoal" | "coreIsMetaActivity";
+
+export type QualityGateDecision =
+  | { action: "accept" }
+  | { action: "reject"; rule: QualityGateRule }
+  | { action: "accept-with-warning"; rule: "coreIsNonGoal" };
+
+/**
+ * Route a freshly derived core through the quality gate (issue #5).
+ * Background runs stay strict (issue #10): non-goal and meta-activity
+ * cores are rejected. A forced /autorename is an explicit user request,
+ * so it degrades instead of rejecting: the ambiguous meta filter is
+ * skipped entirely and non-goal cores are accepted with a warning, so
+ * an explicit rename always yields a title.
+ */
+export function qualityGate(core: string, force: boolean): QualityGateDecision {
+  if (coreIsNonGoal(core)) {
+    return force
+      ? { action: "accept-with-warning", rule: "coreIsNonGoal" }
+      : { action: "reject", rule: "coreIsNonGoal" };
+  }
+  if (!force && coreIsMetaActivity(core)) {
+    return { action: "reject", rule: "coreIsMetaActivity" };
+  }
+  return { action: "accept" };
+}
+
 // ---- configurable title language (issue #3) ---------------------------------
 export type TitleLang = "auto" | "zh" | "en";
 
