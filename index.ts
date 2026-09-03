@@ -58,10 +58,14 @@ import {
   coreIsNonGoal,
   earlyExcerpt,
   earlySelection,
+  formatQualityGateMessage,
+  gateAwareOutcome,
   latestSelection,
   looksLikeError,
   looksLikeResponse,
+  notificationLevelFor,
   parseIso,
+  qualityGate,
   redact,
   scanUserMessages,
   truncateDisplay,
@@ -331,7 +335,16 @@ async function buildLlmRuntime(ctx: ExtensionContext): Promise<LlmRuntime | null
 }
 
 // ---- main flow ----------------------------------------------------------------------
-async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { force?: boolean } = {}): Promise<{ title?: string; reason: string }> {
+/** Result of a rename attempt; the /autorename command maps it to a UI
+ *  notification. `warning` marks outcomes the user must be told about at
+ *  warning level (issue #5: soft quality-gate fallbacks carry a title). */
+interface AutoRenameResult {
+  title?: string;
+  reason: string;
+  warning?: boolean;
+}
+
+async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { force?: boolean } = {}): Promise<AutoRenameResult> {
   const config = loadConfig();
   if (!config.enabled) return { reason: "globally disabled" };
 
@@ -385,9 +398,15 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   const recent = opts.force ? redact(latestSelection(userMsgs)) : "";
   const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "", Boolean(opts.force), config.lang);
   if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
-  if (!locked && (coreIsNonGoal(coreRaw) || coreIsMetaActivity(coreRaw))) {
-    debugLog(`core ${coreRaw.slice(0, 60)} rejected by quality gate; backed off`);
-    return { reason: "core rejected by quality gate; backed off" };
+  // Quality gate (issue #5): background runs stay strict (issue #10).
+  // A forced /autorename degrades instead of rejecting: the ambiguous
+  // meta filter is skipped and non-goal cores are accepted with a
+  // warning, so an explicit request always yields a title.
+  const gate = locked ? undefined : qualityGate(coreRaw, Boolean(opts.force));
+  if (gate && gate.action === "reject") {
+    const reason = formatQualityGateMessage(gate, coreRaw);
+    debugLog(reason);
+    return { reason };
   }
 
   const core = capTitle(locked && prevCore ? prevCore : coreRaw, MAX_TITLE_WORDS, cw);
@@ -396,16 +415,21 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   // Title is stable (core locked). Skip the write when nothing changed so the
   // title isn't churned every refresh.
   const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: locked || sel.substantive || opts.force, paused: false, pausedReason: undefined };
-  if (title === st.lastSetTitle) {
+  const changed = title !== st.lastSetTitle;
+  if (!changed) {
     pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: locked || sel.substantive || opts.force });
-    return { title, reason: "unchanged" };
+  } else {
+    lastGeneratedName = title; // record ownership BEFORE writing so the
+    pi.setSessionName(title);  // session_info_changed event isn't mistaken for a user rename
+    pi.appendEntry(STATE_ENTRY_TYPE, newState);
+    syncBoardName(ctx, title);
   }
-
-  lastGeneratedName = title; // record ownership BEFORE writing so the
-  pi.setSessionName(title);  // session_info_changed event isn't mistaken for a user rename
-  pi.appendEntry(STATE_ENTRY_TYPE, newState);
-  syncBoardName(ctx, title);
-  return { title, reason: "renamed" };
+  // Gate-aware outcome (issue #5): soft fallbacks keep their warning and
+  // gate details on BOTH paths; a locked refresh has no gate decision.
+  const outcome = gate
+    ? gateAwareOutcome(changed ? "renamed" : "unchanged", gate, coreRaw)
+    : { reason: changed ? "renamed" : "unchanged", warning: false };
+  return { title, ...outcome };
 }
 
 // ---- extension ------------------------------------------------------------------------
@@ -418,7 +442,7 @@ export default function autoRename(pi: ExtensionAPI): void {
 
   // Serialized runner shared by the periodic trigger and the /autorename
   // command: force and periodic runs can never interleave (issue #1 CR).
-  const runSerialized = async (ctx: ExtensionContext, force: boolean): Promise<{ title?: string; reason: string } | null> => {
+  const runSerialized = async (ctx: ExtensionContext, force: boolean): Promise<AutoRenameResult | null> => {
     if (running) return null; // a run is already in flight
     running = true;
     try {
@@ -469,7 +493,7 @@ export default function autoRename(pi: ExtensionAPI): void {
       }
       ctx.ui.notify(
         r.title ? `auto-rename: ${r.title} (${r.reason})` : `auto-rename: ${r.reason}`,
-        r.title ? "info" : "warning",
+        notificationLevelFor(r.title, r.warning),
       );
     },
   });
