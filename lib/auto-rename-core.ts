@@ -313,12 +313,15 @@ const GATE_CORE_MAX = 60; // max Unicode code points of a model core echoed into
 
 /**
  * Render an untrusted model core for a single-line log/notification:
- * collapse all whitespace (incl. newlines/tabs) to single spaces, cap
+ * collapse whitespace AND C1 controls to single spaces (JS `\s` misses
+ * U+0085 NEL — a Unicode line separator — and JSON.stringify only escapes
+ * C0, so C1 would otherwise survive and break single-line output), cap
  * at 60 Unicode code points, then JSON-quote so quotes, backslashes and
- * control characters can never forge multi-line output (issue #5 D4).
+ * control characters can never forge multi-line output (issue #5 D4;
+ * C1 fold per PR #6 CR round-1 advisory).
  */
 function quoteGateCore(core: string): string {
-  const flat = (core || "").replace(/\s+/g, " ").trim();
+  const flat = (core || "").replace(/[\s\u0080-\u009f]+/g, " ").trim();
   const chars = Array.from(flat); // code points, not UTF-16 units
   return JSON.stringify(chars.slice(0, GATE_CORE_MAX).join(""));
 }
