@@ -1,6 +1,6 @@
 {
   "name": "@zhuxixi/pi-auto-rename",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AI session naming for pi: derives a short core-goal title from the session's original intent",
   "keywords": [
     "pi",

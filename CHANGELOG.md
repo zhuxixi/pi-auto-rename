@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.1] - 2026-09-03
 
 ### Fixed
 
@@ -12,6 +12,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   quality gate fires: the meta filter is skipped on force and non-goal
   cores are accepted with a warning that names the rule and the
   flagged core; background renames stay strict (issue #5).
+- Gate messages now fold C1 control characters (incl. NEL U+0085)
+  into spaces, so a model core can never break the single-line
+  guarantee (PR #6 CR advisory).
 
 ## [0.2.0] - 2026-08-26
 
