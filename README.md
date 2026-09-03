@@ -36,7 +36,10 @@ applies it via `pi.setSessionName()`.
   model call. Junk cores self-heal on the next refresh.
 - **Quality gates**: greeting/ack openers are skipped, procedural
   labels ("Issue list triage") and non-goal cores ("方案确认") are
-  rejected and backed off to the next cycle.
+  rejected and backed off to the next cycle. A forced `/autorename`
+  degrades instead of rejecting: the meta filter is skipped and
+  non-goal cores are accepted with a warning, so a quality-gate hit
+  never blocks a title.
 - **Manual-rename protection**: an out-of-band name change pauses the
   session so the extension never fights the user.
 - **Secret redaction**: 6 patterns (private keys, AWS keys, API keys,
@@ -122,7 +125,9 @@ Edit the file and run `/reload` to apply.
    forces the title language (`"auto"` follows the original intent).
 4. The output passes quality gates (not a sentence, not a response,
    not a procedural label), is capped to `maxCoreWidth` display
-   columns, and applied via `pi.setSessionName()`.
+   columns, and applied via `pi.setSessionName()`. On `/autorename`
+   the ambiguous meta filter is skipped and non-goal cores fall back
+   to a warning instead of an empty rejection.
 5. State (`lastRunEpoch`, `lastSetTitle`, `lastCore`, `coreLocked`,
    `paused`) lives in the session file as `auto-rename-state` custom
    entries, so it survives reloads.
@@ -143,6 +148,11 @@ After editing, run `/reload` inside pi to hot-reload the extension.
   a model call). `/autorename` forces a re-derive — it bypasses the
   lock and includes the latest user messages, so a drifted title can
   be regenerated.
+- **`/autorename` reports "quality gate flagged core …"**: the model
+  produced a non-goal label (e.g. "方案确认"), but force mode still
+  set a title from it. Use `/name` to set your own, or run
+  `/autorename` again; the next background refresh re-derives the
+  core anyway.
 - **No rename happens at all**: check `enabled` in
   `~/.pi/agent/auto-rename.json`, and that the configured model is
   available in pi's model registry (`pi models`).

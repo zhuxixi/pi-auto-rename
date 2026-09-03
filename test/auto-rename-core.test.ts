@@ -18,6 +18,8 @@ import {
 	earlyExcerpt,
 	earlySelection,
 	FORCE_SYSTEM_PROMPT_TEMPLATE,
+	formatQualityGateMessage,
+	gateAwareOutcome,
 	isCommandInvocation,
 	injectLang,
 	isTrivialMessage,
@@ -26,7 +28,9 @@ import {
 	latestSelection,
 	looksLikeError,
 	looksLikeResponse,
+	notificationLevelFor,
 	parseIso,
+	qualityGate,
 	redact,
 	resolveLang,
 	scanUserMessages,
@@ -311,6 +315,54 @@ check("buildUserPrompt zh line", buildUserPrompt(false, "zh", "hello", "", "").i
 check("buildUserPrompt en line", buildUserPrompt(false, "en", "hello", "", "").includes("English noun-phrase title (3-5 words, no Chinese)"));
 check("buildUserPrompt recent block", buildUserPrompt(false, "auto", "hello", "recent msg", "").includes("RECENT CONTEXT (the session's latest user messages") && buildUserPrompt(false, "auto", "hello", "recent msg", "").includes("recent msg"));
 check("buildUserPrompt prevTitle block", buildUserPrompt(false, "auto", "hello", "", "Old title").includes("Previous title: Old title"));
+
+// ---- qualityGate: force-split gate policy (issue #5) ----
+const q1 = qualityGate("方案确认", false);
+check("qualityGate background non-goal rejects", q1.action === "reject" && q1.rule === "coreIsNonGoal");
+const q2 = qualityGate("Issue list triage", false);
+check("qualityGate background meta rejects", q2.action === "reject" && q2.rule === "coreIsMetaActivity");
+const q3 = qualityGate("方案确认", true);
+check("qualityGate force non-goal accepts with warning", q3.action === "accept-with-warning" && q3.rule === "coreIsNonGoal");
+check("qualityGate force meta accepts", qualityGate("review github issue", true).action === "accept");
+check("qualityGate force issue 分析 accepts", qualityGate("issue 分析", true).action === "accept");
+check("qualityGate background clean accepts", qualityGate("修复登录越界", false).action === "accept");
+check("qualityGate force clean accepts", qualityGate("修复登录越界", true).action === "accept");
+check("qualityGate background fix login bug accepts", qualityGate("fix login bug", false).action === "accept");
+check("qualityGate force fix login bug accepts", qualityGate("fix login bug", true).action === "accept");
+check("qualityGate background empty accepts", qualityGate("", false).action === "accept");
+check("qualityGate force empty accepts", qualityGate("", true).action === "accept");
+
+// ---- gate message safety + outcome merge + notification level (issue #5) ----
+const rejMsg = formatQualityGateMessage({ action: "reject", rule: "coreIsMetaActivity" }, "Issue list triage");
+eq("formatQualityGateMessage reject shape", rejMsg, `core rejected by quality gate (coreIsMetaActivity): "Issue list triage"`);
+const warnMsg = formatQualityGateMessage({ action: "accept-with-warning", rule: "coreIsNonGoal" }, "方案确认");
+eq("formatQualityGateMessage accept-with-warning shape", warnMsg, `quality gate flagged core (coreIsNonGoal): "方案确认"`);
+eq("formatQualityGateMessage collapses newlines", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "方案\n确认"), `core rejected by quality gate (coreIsNonGoal): "方案 确认"`);
+eq("formatQualityGateMessage collapses tabs", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\tb"), `core rejected by quality gate (coreIsNonGoal): "a b"`);
+eq("formatQualityGateMessage escapes quotes", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, 'say "hi"'), 'core rejected by quality gate (coreIsNonGoal): "say \\\"hi\\\""');
+check("formatQualityGateMessage no raw newline", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\nb").includes("\n"));
+check("formatQualityGateMessage no raw tab", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\tb").includes("\t"));
+eq("formatQualityGateMessage caps 60 code points", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "x".repeat(80)), `core rejected by quality gate (coreIsNonGoal): "${"x".repeat(60)}"`);
+check("formatQualityGateMessage escapes ANSI control chars", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "\u001b[31mred").includes("\u001b"));
+check("formatQualityGateMessage collapses C1 NEL line separator", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\u0085b\u0080c") === `core rejected by quality gate (coreIsNonGoal): "a b c"`);
+check("formatQualityGateMessage counts surrogate pairs as one code point", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "😀".repeat(80)) === `core rejected by quality gate (coreIsNonGoal): "${"😀".repeat(60)}"`);
+
+const oa = gateAwareOutcome("renamed", { action: "accept" }, "fix login");
+check("gateAwareOutcome accept renamed", oa.reason === "renamed" && oa.warning === false);
+const ob = gateAwareOutcome("unchanged", { action: "accept" }, "fix login");
+check("gateAwareOutcome accept unchanged", ob.reason === "unchanged" && ob.warning === false);
+const oc = gateAwareOutcome("renamed", { action: "accept-with-warning", rule: "coreIsNonGoal" }, "方案确认");
+check("gateAwareOutcome warn renamed", JSON.stringify(oc) === JSON.stringify({ reason: `renamed; quality gate flagged core (coreIsNonGoal): "方案确认"; force used normalized core fallback`, warning: true }));
+const od = gateAwareOutcome("unchanged", { action: "accept-with-warning", rule: "coreIsNonGoal" }, "方案确认");
+check("gateAwareOutcome warn unchanged keeps info", od.warning === true && od.reason.startsWith("unchanged; quality gate flagged core"));
+check("gateAwareOutcome warn unchanged carries core", od.reason.includes('"方案确认"'));
+
+// ---- notificationLevelFor: UI level mapping (issue #5 A7) ----
+eq("notificationLevelFor soft fallback warning", notificationLevelFor("方案确认", true), "warning");
+eq("notificationLevelFor no title warning", notificationLevelFor(undefined, false), "warning");
+eq("notificationLevelFor no title warning flag set", notificationLevelFor(undefined, true), "warning");
+eq("notificationLevelFor normal success info", notificationLevelFor("fix login", false), "info");
+eq("notificationLevelFor normal success info flag omitted", notificationLevelFor("fix login"), "info");
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);

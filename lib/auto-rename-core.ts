@@ -282,6 +282,93 @@ export function coreIsMetaActivity(core: string): boolean {
   return META_SUBJECT.test(c) && META_ACTION.test(c);
 }
 
+export type QualityGateRule = "coreIsNonGoal" | "coreIsMetaActivity";
+
+export type QualityGateDecision =
+  | { action: "accept" }
+  | { action: "reject"; rule: QualityGateRule }
+  | { action: "accept-with-warning"; rule: "coreIsNonGoal" };
+
+/**
+ * Route a freshly derived core through the quality gate (issue #5).
+ * Background runs stay strict (issue #10): non-goal and meta-activity
+ * cores are rejected. A forced /autorename is an explicit user request,
+ * so it degrades instead of rejecting: the ambiguous meta filter is
+ * skipped entirely and non-goal cores are accepted with a warning, so
+ * a quality-gate hit never blocks an explicit rename.
+ */
+export function qualityGate(core: string, force: boolean): QualityGateDecision {
+  if (coreIsNonGoal(core)) {
+    return force
+      ? { action: "accept-with-warning", rule: "coreIsNonGoal" }
+      : { action: "reject", rule: "coreIsNonGoal" };
+  }
+  if (!force && coreIsMetaActivity(core)) {
+    return { action: "reject", rule: "coreIsMetaActivity" };
+  }
+  return { action: "accept" };
+}
+
+const GATE_CORE_MAX = 60; // max Unicode code points of a model core echoed into logs/notifications
+
+/**
+ * Render an untrusted model core for a single-line log/notification:
+ * collapse whitespace AND C1 controls to single spaces (JS `\s` misses
+ * U+0085 NEL — a Unicode line separator — and JSON.stringify only escapes
+ * C0, so C1 would otherwise survive and break single-line output), cap
+ * at 60 Unicode code points, then JSON-quote so quotes, backslashes and
+ * control characters can never forge multi-line output (issue #5 D4;
+ * C1 fold per PR #6 CR round-1 advisory).
+ */
+function quoteGateCore(core: string): string {
+  const flat = (core || "").replace(/[\s\u0080-\u009f]+/g, " ").trim();
+  const chars = Array.from(flat); // code points, not UTF-16 units
+  return JSON.stringify(chars.slice(0, GATE_CORE_MAX).join(""));
+}
+
+/**
+ * Single-line, safe quality-gate message naming the rule and quoting
+ * the flagged core (issue #5 D2/D4).
+ */
+export function formatQualityGateMessage(
+  decision: Exclude<QualityGateDecision, { action: "accept" }>,
+  core: string,
+): string {
+  const quoted = quoteGateCore(core);
+  if (decision.action === "reject") {
+    return `core rejected by quality gate (${decision.rule}): ${quoted}`;
+  }
+  return `quality gate flagged core (${decision.rule}): ${quoted}`;
+}
+
+/**
+ * Merge a rename outcome with the quality-gate decision (issue #5 D3):
+ * plain accepts keep the legacy reason; accept-with-warning keeps the
+ * gate details on BOTH the renamed and unchanged paths, with warning
+ * set so the command UI notifies at warning level.
+ */
+export function gateAwareOutcome(
+  outcome: "renamed" | "unchanged",
+  decision: Exclude<QualityGateDecision, { action: "reject" }>,
+  core: string,
+): { reason: string; warning: boolean } {
+  if (decision.action === "accept") {
+    return { reason: outcome, warning: false };
+  }
+  return {
+    reason: `${outcome}; ${formatQualityGateMessage(decision, core)}; force used normalized core fallback`,
+    warning: true,
+  };
+}
+
+/** UI notification level for a rename result (issue #5 D3/A7). */
+export function notificationLevelFor(
+  title: string | undefined,
+  warning = false,
+): "info" | "warning" {
+  return warning || !title ? "warning" : "info";
+}
+
 // ---- configurable title language (issue #3) ---------------------------------
 export type TitleLang = "auto" | "zh" | "en";
 
