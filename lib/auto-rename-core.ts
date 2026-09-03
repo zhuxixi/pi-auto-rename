@@ -295,7 +295,7 @@ export type QualityGateDecision =
  * cores are rejected. A forced /autorename is an explicit user request,
  * so it degrades instead of rejecting: the ambiguous meta filter is
  * skipped entirely and non-goal cores are accepted with a warning, so
- * an explicit rename always yields a title.
+ * a quality-gate hit never blocks an explicit rename.
  */
 export function qualityGate(core: string, force: boolean): QualityGateDecision {
   if (coreIsNonGoal(core)) {

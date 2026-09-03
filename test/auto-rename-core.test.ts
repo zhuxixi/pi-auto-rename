@@ -343,6 +343,8 @@ eq("formatQualityGateMessage escapes quotes", formatQualityGateMessage({ action:
 check("formatQualityGateMessage no raw newline", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\nb").includes("\n"));
 check("formatQualityGateMessage no raw tab", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\tb").includes("\t"));
 eq("formatQualityGateMessage caps 60 code points", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "x".repeat(80)), `core rejected by quality gate (coreIsNonGoal): "${"x".repeat(60)}"`);
+check("formatQualityGateMessage escapes ANSI control chars", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "\u001b[31mred").includes("\u001b"));
+check("formatQualityGateMessage counts surrogate pairs as one code point", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "😀".repeat(80)) === `core rejected by quality gate (coreIsNonGoal): "${"😀".repeat(60)}"`);
 
 const oa = gateAwareOutcome("renamed", { action: "accept" }, "fix login");
 check("gateAwareOutcome accept renamed", oa.reason === "renamed" && oa.warning === false);

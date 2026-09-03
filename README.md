@@ -38,8 +38,8 @@ applies it via `pi.setSessionName()`.
   labels ("Issue list triage") and non-goal cores ("方案确认") are
   rejected and backed off to the next cycle. A forced `/autorename`
   degrades instead of rejecting: the meta filter is skipped and
-  non-goal cores are accepted with a warning, so an explicit rename
-  always yields a title.
+  non-goal cores are accepted with a warning, so a quality-gate hit
+  never blocks a title.
 - **Manual-rename protection**: an out-of-band name change pauses the
   session so the extension never fights the user.
 - **Secret redaction**: 6 patterns (private keys, AWS keys, API keys,
