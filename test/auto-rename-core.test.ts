@@ -18,6 +18,8 @@ import {
 	earlyExcerpt,
 	earlySelection,
 	FORCE_SYSTEM_PROMPT_TEMPLATE,
+	formatQualityGateMessage,
+	gateAwareOutcome,
 	isCommandInvocation,
 	injectLang,
 	isTrivialMessage,
@@ -26,6 +28,7 @@ import {
 	latestSelection,
 	looksLikeError,
 	looksLikeResponse,
+	notificationLevelFor,
 	parseIso,
 	qualityGate,
 	redact,
@@ -328,6 +331,35 @@ check("qualityGate background fix login bug accepts", qualityGate("fix login bug
 check("qualityGate force fix login bug accepts", qualityGate("fix login bug", true).action === "accept");
 check("qualityGate background empty accepts", qualityGate("", false).action === "accept");
 check("qualityGate force empty accepts", qualityGate("", true).action === "accept");
+
+// ---- gate message safety + outcome merge + notification level (issue #5) ----
+const rejMsg = formatQualityGateMessage({ action: "reject", rule: "coreIsMetaActivity" }, "Issue list triage");
+eq("formatQualityGateMessage reject shape", rejMsg, `core rejected by quality gate (coreIsMetaActivity): "Issue list triage"`);
+const warnMsg = formatQualityGateMessage({ action: "accept-with-warning", rule: "coreIsNonGoal" }, "方案确认");
+eq("formatQualityGateMessage accept-with-warning shape", warnMsg, `quality gate flagged core (coreIsNonGoal): "方案确认"`);
+eq("formatQualityGateMessage collapses newlines", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "方案\n确认"), `core rejected by quality gate (coreIsNonGoal): "方案 确认"`);
+eq("formatQualityGateMessage collapses tabs", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\tb"), `core rejected by quality gate (coreIsNonGoal): "a b"`);
+eq("formatQualityGateMessage escapes quotes", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, 'say "hi"'), 'core rejected by quality gate (coreIsNonGoal): "say \\\"hi\\\""');
+check("formatQualityGateMessage no raw newline", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\nb").includes("\n"));
+check("formatQualityGateMessage no raw tab", !formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "a\tb").includes("\t"));
+eq("formatQualityGateMessage caps 60 code points", formatQualityGateMessage({ action: "reject", rule: "coreIsNonGoal" }, "x".repeat(80)), `core rejected by quality gate (coreIsNonGoal): "${"x".repeat(60)}"`);
+
+const oa = gateAwareOutcome("renamed", { action: "accept" }, "fix login");
+check("gateAwareOutcome accept renamed", oa.reason === "renamed" && oa.warning === false);
+const ob = gateAwareOutcome("unchanged", { action: "accept" }, "fix login");
+check("gateAwareOutcome accept unchanged", ob.reason === "unchanged" && ob.warning === false);
+const oc = gateAwareOutcome("renamed", { action: "accept-with-warning", rule: "coreIsNonGoal" }, "方案确认");
+check("gateAwareOutcome warn renamed", JSON.stringify(oc) === JSON.stringify({ reason: `renamed; quality gate flagged core (coreIsNonGoal): "方案确认"; force used normalized core fallback`, warning: true }));
+const od = gateAwareOutcome("unchanged", { action: "accept-with-warning", rule: "coreIsNonGoal" }, "方案确认");
+check("gateAwareOutcome warn unchanged keeps info", od.warning === true && od.reason.startsWith("unchanged; quality gate flagged core"));
+check("gateAwareOutcome warn unchanged carries core", od.reason.includes('"方案确认"'));
+
+// ---- notificationLevelFor: UI level mapping (issue #5 A7) ----
+eq("notificationLevelFor soft fallback warning", notificationLevelFor("方案确认", true), "warning");
+eq("notificationLevelFor no title warning", notificationLevelFor(undefined, false), "warning");
+eq("notificationLevelFor no title warning flag set", notificationLevelFor(undefined, true), "warning");
+eq("notificationLevelFor normal success info", notificationLevelFor("fix login", false), "info");
+eq("notificationLevelFor normal success info flag omitted", notificationLevelFor("fix login"), "info");
 
 if (failed) {
 	console.error(`\n${failed} checks FAILED`);
