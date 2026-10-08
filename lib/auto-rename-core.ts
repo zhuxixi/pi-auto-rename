@@ -497,6 +497,14 @@ export function evidencePromptBlock(e: WorkEvidence): string {
     + "reflected in the core, condensed not verbatim):\n" + Array.from(line).slice(0, 400).join("");
 }
 
+/** Mechanical fallback core from a branch slug (issue #7 D8): expand kebab to
+ *  words and normalize via capTitle (word cap + display width + lowercase). */
+export function slugToCore(slug: string): string {
+  const cleaned = (slug || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!cleaned) return "";
+  return capTitle(cleaned.replace(/-/g, " "));
+}
+
 // ---- issue-driven work evidence (issue #7) -----------------------------------
 // The session's "issue under work" is recovered from tool calls and tool
 // results — the subject of an issue-driven session lives there, not in the

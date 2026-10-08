@@ -1,6 +1,6 @@
 // issue #7 — work-evidence extraction from tool calls / tool results,
 // plus its high-weight injection into the title prompt (evidencePromptBlock).
-import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock } from "../lib/auto-rename-core";
+import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock, slugToCore } from "../lib/auto-rename-core";
 import type { WorkEvidence } from "../lib/auto-rename-core";
 
 // zero-dep helpers, inlined (no test framework — same pattern as test/auto-rename-core.test.ts)
@@ -120,6 +120,12 @@ eq("null evidence legacy byte-compat",
 eq("omitted evidence legacy byte-compat",
   buildUserPrompt(false, "auto", "early", "recent", "Old"),
   buildUserPrompt(false, "auto", "early", "recent", "Old", undefined));
+
+// ---- slugToCore mechanical fallback (issue #7 task 3 / A6) ---
+eq("slug expands to words", slugToCore("test-config-isolation"), "test config isolation");
+eq("empty slug -> empty core", slugToCore(""), "");
+eq("junk slug normalized", slugToCore("Fix--Cursor!!"), "fix cursor");
+check("long slug capped at width", slugToCore("a-very-long-branch-slug-name-here").length <= 24);
 
 if (failed > 0) { console.error(`${failed} check(s) failed`); process.exit(1); }
 console.log("all checks passed");
