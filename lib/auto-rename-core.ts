@@ -461,24 +461,40 @@ export function systemPromptFor(force: boolean, lang: TitleLang): string {
  * ORIGINAL INTENT excerpt. Moved here from index.ts (issue #3 final review)
  * so the glue wiring is unit-testable.
  */
-export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, recent: string, prevTitle: string): string {
+export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, recent: string, prevTitle: string, evidence?: WorkEvidence | null): string {
   let user = (force
-    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
-      "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
-    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
-    USER_PROMPT_LANG_LINE[lang] +
-    "what this one session is accomplishing. No punctuation, no repo name, no " +
-    "issue/PR numbers, no greetings/role-play.\n\n";
+    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. "
+      + "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
+    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ")
+    + USER_PROMPT_LANG_LINE[lang]
+    + "what this one session is accomplishing. No punctuation, no repo name, no "
+    + "issue/PR numbers, no greetings/role-play.\n\n";
   if (recent) {
-    user += "RECENT CONTEXT (the session's latest user messages — if the actual " +
-      "focus has evolved beyond the original intent, reflect the CURRENT focus):\n" +
-      recent + "\n\n";
+    user += "RECENT CONTEXT (the session's latest user messages — if the actual "
+      + "focus has evolved beyond the original intent, reflect the CURRENT focus):\n"
+      + recent + "\n\n";
   }
   if (prevTitle) {
-    user += "Previous title: " + prevTitle + "\n\n";
+    user += (evidence
+      ? "Previous title (if it already reflects the GITHUB ISSUE subject, output it unchanged): "
+      : "Previous title: ") + prevTitle + "\n\n";
+  }
+  if (evidence) {
+    user += evidencePromptBlock(evidence) + "\n\n";
   }
   user += "ORIGINAL INTENT:\n" + early;
   return user;
+}
+
+/** The high-weight block naming the issue this session is actually working on
+ *  (issue #7): its subject matter MUST shape the core, condensed not verbatim. */
+export function evidencePromptBlock(e: WorkEvidence): string {
+  const subject = e.title || e.slug;
+  const line = subject
+    ? `#${e.issueNumber} ${subject}`
+    : `#${e.issueNumber} (subject not captured; derive it from the ORIGINAL INTENT)`;
+  return "GITHUB ISSUE UNDER WORK (this session's actual work — its subject matter MUST be "
+    + "reflected in the core, condensed not verbatim):\n" + Array.from(line).slice(0, 400).join("");
 }
 
 // ---- issue-driven work evidence (issue #7) -----------------------------------

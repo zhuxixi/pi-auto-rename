@@ -1,5 +1,7 @@
-// issue #7 — work-evidence extraction from tool calls / tool results.
-import { extractWorkEvidence } from "../lib/auto-rename-core";
+// issue #7 — work-evidence extraction from tool calls / tool results,
+// plus its high-weight injection into the title prompt (evidencePromptBlock).
+import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock } from "../lib/auto-rename-core";
+import type { WorkEvidence } from "../lib/auto-rename-core";
 
 // zero-dep helpers, inlined (no test framework — same pattern as test/auto-rename-core.test.ts)
 let failed = 0;
@@ -91,6 +93,33 @@ eq("binary counting keeps dominance sane", evBinary?.issueNumber, 888);
 // empty branch / no tool activity -> null
 eq("no messages -> null", extractWorkEvidence([]), null);
 eq("user-only branch -> null", extractWorkEvidence([userMsg("hello"), userMsg("看一下 issue 460")]), null);
+
+// ---- evidencePromptBlock + buildUserPrompt evidence param (issue #7 task 2) ---
+const EV: WorkEvidence = { issueNumber: 460, title: "bug(test): pytest 写穿真实配置", slug: "test-config-isolation", key: "issue:460" };
+
+// block content
+const blk = evidencePromptBlock(EV);
+check("block header names the rule", blk.includes("GITHUB ISSUE UNDER WORK") && blk.includes("MUST be reflected in the core"));
+check("block carries number + title", blk.includes("#460") && blk.includes("pytest 写穿真实配置"));
+
+// slug subject when title missing
+check("slug subject fallback", evidencePromptBlock({ issueNumber: 7, title: "", slug: "fix-cursor", key: "issue:7" }).includes("fix-cursor"));
+// neither: explicit derive-from-intent hint
+check("no subject hint", evidencePromptBlock({ issueNumber: 7, title: "", slug: "", key: "issue:7" }).includes("ORIGINAL INTENT"));
+
+// buildUserPrompt: evidence block sits between Previous title and ORIGINAL INTENT
+const p = buildUserPrompt(false, "auto", "early intent text", "recent ctx", "Old title", EV);
+const iPrev = p.indexOf("Previous title"), iEv = p.indexOf("GITHUB ISSUE UNDER WORK"), iOrig = p.indexOf("ORIGINAL INTENT:");
+check("block order prev < evidence < original", iPrev >= 0 && iPrev < iEv && iEv < iOrig);
+check("prevTitle line mentions keep-if-subject rule", p.includes("keep it unchanged") || p.includes("output it unchanged"));
+
+// no evidence -> byte-identical legacy output (incl. legacy prevTitle wording)
+eq("null evidence legacy byte-compat",
+  buildUserPrompt(false, "auto", "early", "", "Old title", null),
+  buildUserPrompt(false, "auto", "early", "", "Old title"));
+eq("omitted evidence legacy byte-compat",
+  buildUserPrompt(false, "auto", "early", "recent", "Old"),
+  buildUserPrompt(false, "auto", "early", "recent", "Old", undefined));
 
 if (failed > 0) { console.error(`${failed} check(s) failed`); process.exit(1); }
 console.log("all checks passed");
