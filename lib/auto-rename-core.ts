@@ -480,3 +480,120 @@ export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, 
   user += "ORIGINAL INTENT:\n" + early;
   return user;
 }
+
+// ---- issue-driven work evidence (issue #7) -----------------------------------
+// The session's "issue under work" is recovered from tool calls and tool
+// results — the subject of an issue-driven session lives there, not in the
+// user prompts ("看一下 issue 460" names no subject). Zero network: the issue
+// title is parsed from `gh issue view` output already present in the
+// transcript. Signals are counted BINARY per issue (a worktree path appears
+// in dozens of later commands; occurrence counts would inflate it).
+
+export interface WorkEvidence {
+  issueNumber: number;
+  title: string;   // "" when the issue title was never captured
+  slug: string;    // "" when no issue-N-<slug> was seen
+  key: string;     // "issue:460" — state comparison key
+}
+
+// explicit issue mutations: the strongest claim ("working on", not "looking at")
+const RE_ISSUE_MUTATE = /gh\s+issue\s+(?:edit|close|reopen|comment)\s+(\d+)/g;
+// gh issue view N is weak: triage sessions view dozens of issues
+const RE_ISSUE_VIEW = /gh\s+issue\s+view\s+(\d+)/g;
+// branch / worktree slugs (issue-460-test-config-isolation) claim + carry a subject slug
+const RE_BRANCH_SLUG = /(?<![\w-])issue-(\d+)-([a-z0-9][a-z0-9-]{2,})/gi;
+// the github-issue-driven research/spec directory layout claims its issue
+const RE_DRIVEN_PATH = /github-issue-driven\/[^\s"'/]+\/[^\s"'/]+\/issue-(\d+)\//g;
+
+interface IssueSignals {
+  mutate: boolean; view: boolean; branch: boolean; path: boolean;
+  slug: string; title: string;
+}
+
+function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
+  const map = new Map<number, IssueSignals>();
+  const sig = (n: number): IssueSignals => {
+    let s = map.get(n);
+    if (!s) {
+      s = { mutate: false, view: false, branch: false, path: false, slug: "", title: "" };
+      map.set(n, s);
+    }
+    return s;
+  };
+  const claimSlug = (text: string) => {
+    for (const mm of text.matchAll(RE_BRANCH_SLUG)) {
+      const s = sig(Number(mm[1]));
+      s.branch = true;
+      if (!s.slug) s.slug = mm[2].toLowerCase();
+    }
+  };
+  for (const entry of branch) {
+    if (entry?.type !== "message" || !entry.message) continue;
+    const m = entry.message;
+    if (m.role === "assistant" && Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (b?.type !== "toolCall") continue;
+        const args = JSON.stringify(b.arguments ?? {});
+        for (const mm of args.matchAll(RE_ISSUE_MUTATE)) sig(Number(mm[1])).mutate = true;
+        for (const mm of args.matchAll(RE_ISSUE_VIEW)) sig(Number(mm[1])).view = true;
+        for (const mm of args.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
+        claimSlug(args);
+      }
+    }
+    if (m.role === "toolResult") {
+      const text = blockText(m.content);
+      if (!text) continue;
+      for (const mm of text.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
+      claimSlug(text);
+      captureIssueTitles(text, sig);
+    }
+  }
+  return map;
+}
+
+/** Pull `title:`/`number:` pairs (gh issue view plain) and {"number":N,
+ *  "title":"…"} (gh view --json, either key order) out of one tool result. */
+function captureIssueTitles(text: string, sig: (n: number) => IssueSignals): void {
+  const titles = [...text.matchAll(/^title:\t?(\S.*)$/gm)].map((m) => m[1].trim());
+  const numbers = [...text.matchAll(/^number:\t?(\d+)$/gm)].map((m) => Number(m[1]));
+  if (titles.length && titles.length === numbers.length) {
+    titles.forEach((t, i) => { const s = sig(numbers[i]); if (!s.title) s.title = t.slice(0, 200); });
+    return;
+  }
+  try { // whole-result JSON (gh issue view --json alone in the result)
+    const o = JSON.parse(text);
+    if (o && typeof o === "object" && typeof o.title === "string" && typeof o.number === "number") {
+      const s = sig(o.number);
+      if (!s.title) s.title = String(o.title).slice(0, 200);
+      return;
+    }
+  } catch { /* embedded in a bigger result — regex fallback below */ }
+  for (const mm of text.matchAll(/"number"\s*:\s*(\d+)[\s\S]{0,400}?"title"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
+    const s = sig(Number(mm[1]));
+    if (!s.title) { try { s.title = JSON.parse(`"${mm[2]}"`).slice(0, 200); } catch { /* keep "" */ } }
+  }
+  for (const mm of text.matchAll(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"[\s\S]{0,400}?"number"\s*:\s*(\d+)/g)) {
+    const s = sig(Number(mm[2]));
+    if (!s.title) { try { s.title = JSON.parse(`"${mm[1]}"`).slice(0, 200); } catch { /* keep "" */ } }
+  }
+}
+
+const W_MUTATE = 6, W_BRANCH = 3, W_PATH = 3, W_VIEW = 1;
+
+/** The single issue this session is WORKING on, or null. Requires a claim
+ *  signal (mutate/branch/path — binary) and a 2x lead over the runner-up;
+ *  view-only and ambiguous sessions deliberately yield no evidence. */
+export function extractWorkEvidence(branch: any[]): WorkEvidence | null {
+  const map = scanIssueSignals(branch);
+  const ranked = [...map.entries()]
+    .map(([n, s]) => ({
+      n, s,
+      w: (s.mutate ? W_MUTATE : 0) + (s.branch ? W_BRANCH : 0) + (s.path ? W_PATH : 0) + (s.view ? W_VIEW : 0),
+    }))
+    .sort((a, b) => b.w - a.w);
+  const top = ranked[0];
+  if (!top || !(top.s.mutate || top.s.branch || top.s.path)) return null; // no claim at all
+  const second = ranked[1];
+  if (second && top.w < 2 * second.w) return null;                        // ambiguous
+  return { issueNumber: top.n, title: top.s.title, slug: top.s.slug, key: `issue:${top.n}` };
+}
