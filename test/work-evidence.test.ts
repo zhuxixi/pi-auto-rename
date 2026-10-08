@@ -134,5 +134,8 @@ check("evidence appeared (no stored key) -> re-derive", shouldReDerive({ coreLoc
 check("same key -> no re-derive", shouldReDerive({ coreLocked: true, evidenceKey: "issue:460" }, EV460) === false);
 check("key changed -> re-derive", shouldReDerive({ coreLocked: true, evidenceKey: "issue:100" }, EV460) === true);
 
+// ---- evidencePromptBlock subject redaction (issue #7 final-review CR) ---
+check("block redacts secret-shaped titles", !evidencePromptBlock({ issueNumber: 1, title: "key sk-abcdefghijklmnopqrstuvwx leak", slug: "", key: "issue:1" }).includes("sk-abcdefghijklmnopqrstuvwx"));
+
 if (failed > 0) { console.error(`${failed} check(s) failed`); process.exit(1); }
 console.log("all checks passed");

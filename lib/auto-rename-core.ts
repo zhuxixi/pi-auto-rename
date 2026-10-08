@@ -495,7 +495,7 @@ export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, 
 /** The high-weight block naming the issue this session is actually working on
  *  (issue #7): its subject matter MUST shape the core, condensed not verbatim. */
 export function evidencePromptBlock(e: WorkEvidence): string {
-  const subject = e.title || e.slug;
+  const subject = redact(e.title || e.slug); // secrets must not reach the model via the issue subject
   const line = subject
     ? `#${e.issueNumber} ${subject}`
     : `#${e.issueNumber} (subject not captured; derive it from the ORIGINAL INTENT)`;
