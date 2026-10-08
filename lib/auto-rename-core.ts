@@ -271,7 +271,10 @@ export function coreIsNonGoal(core: string): boolean {
 }
 
 const META_SUBJECT = /(issue|pr|pull\s*request|github)/i;
-const META_ACTION = /(?:\b(?:list|review|triage)\b|retriev|compil|analy[sz]|查看|梳理|分析|列表|审查|汇总)/i; // PR #11 CR r2: word-bounded list/review/triage (checklist/preview escape), analy[sz] keeps verb/plural variants out, analytics stays out
+// PR #11 CR r2 word-bounded list/review/triage; analy[sz] keeps analytics out.
+// issue #7: + 中文流程动词（认领/处理/调研/关闭/筛选/评估/跟进/闭环）——`issue认领处理`
+// 类 core 曾整体漏过；META_SUBJECT 前置条件保证只影响含 issue/pr/github 的 core。
+const META_ACTION = /(?:\b(?:list|review|triage)\b|retriev|compil|analy[sz]|查看|梳理|分析|列表|审查|汇总|认领|处理|调研|关闭|筛选|评估|跟进|闭环)/i;
 
 /** True if a core labels the *process* (triaging/reviewing issues) instead of
  *  the *goal* — the classic junk title from orchestrated sessions whose first

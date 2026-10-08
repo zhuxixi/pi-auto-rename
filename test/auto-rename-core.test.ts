@@ -331,6 +331,17 @@ check("qualityGate background fix login bug accepts", qualityGate("fix login bug
 check("qualityGate force fix login bug accepts", qualityGate("fix login bug", true).action === "accept");
 check("qualityGate background empty accepts", qualityGate("", false).action === "accept");
 check("qualityGate force empty accepts", qualityGate("", true).action === "accept");
+check("gate rejects issue认领处理 (bg)", qualityGate("issue认领处理", false).action === "reject");
+check("gate rejects issue初步调研 (bg)", qualityGate("issue初步调研", false).action === "reject");
+check("gate rejects 未认领issue筛选 (bg)", qualityGate("未认领issue筛选", false).action === "reject");
+check("gate rejects github issue 闭环 (bg)", qualityGate("github issue 闭环", false).action === "reject");
+// force 语义不回归（issue #5）
+check("force accepts issue认领处理", qualityGate("issue认领处理", true).action === "accept");
+check("force accepts issue 分析", qualityGate("issue 分析", true).action === "accept");
+// 扩词不误伤：目标本身含 issue 词但无流程动词
+check("clean issue-template core passes", qualityGate("issue模板优化", false).action === "accept");
+check("clean github-actions core passes", qualityGate("github actions修复", false).action === "accept");
+check("clean zh core passes", qualityGate("修复登录越界", false).action === "accept");
 
 // ---- gate message safety + outcome merge + notification level (issue #5) ----
 const rejMsg = formatQualityGateMessage({ action: "reject", rule: "coreIsMetaActivity" }, "Issue list triage");
