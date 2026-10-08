@@ -58,6 +58,7 @@ import {
   coreIsNonGoal,
   earlyExcerpt,
   earlySelection,
+  extractWorkEvidence,
   formatQualityGateMessage,
   gateAwareOutcome,
   latestSelection,
@@ -68,11 +69,14 @@ import {
   qualityGate,
   redact,
   scanUserMessages,
+  shouldReDerive,
+  slugToCore,
   truncateDisplay,
   buildUserPrompt,
   resolveLang,
   systemPromptFor,
   type TitleLang,
+  type WorkEvidence,
 } from "./lib/auto-rename-core";
 
 // Re-export the pure core so existing imports from this entry keep working.
@@ -242,10 +246,10 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
  * prevCore is passed empty and recent/prevTitle feed the prompt instead, so the
  * model re-derives with the latest context (issue #1).
  */
-async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false, lang: TitleLang): Promise<string | null> {
+async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false, lang: TitleLang, evidence: WorkEvidence | null = null): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
-  const user = buildUserPrompt(force, lang, early, recent, prevTitle);
+  const user = buildUserPrompt(force, lang, early, recent, prevTitle, evidence);
   const core = await llmOnce(rt, user,
     "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.",
     undefined, systemPromptFor(force, lang));
@@ -260,6 +264,7 @@ interface AutoRenameState {
   coreLocked?: boolean; // issue #10 D4: re-derive on every refresh until locked
   paused?: boolean;
   pausedReason?: string;
+  evidenceKey?: string; // issue #7: evidence the current core was derived under ("issue:460")
 }
 
 function readState(branch: any[]): AutoRenameState {
@@ -388,15 +393,23 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   // every refresh re-derives (cheap) so a junk core self-corrects. A forced
   // /autorename always unlocks: the model is called again with the latest
   // context so a drifted title can be regenerated (issue #1).
-  const locked = !opts.force && Boolean(st.coreLocked && prevCore);
+  // issue #7: the issue under work (from tool evidence) and whether the
+  // established core predates it — a pre-evidence core must re-derive once.
+  const evidence = extractWorkEvidence(branch);
+  const rederive = shouldReDerive(st, evidence);
+  const locked = !opts.force && Boolean(st.coreLocked && prevCore) && !rederive;
 
   const rt = await buildLlmRuntime(ctx);
   if (!rt) return { reason: "no usable model (registry auth failed)" };
 
   // redact secrets before anything goes to the model
   const safeEarly = redact(early);
-  const recent = opts.force ? redact(latestSelection(userMsgs)) : "";
-  const coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, opts.force ? redact(prevCore) : "", Boolean(opts.force), config.lang);
+  const promptForce = Boolean(opts.force) || rederive;
+  const recent = promptForce ? redact(latestSelection(userMsgs)) : "";
+  let coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, promptForce ? redact(prevCore) : "", promptForce, config.lang, evidence);
+  if (!coreRaw && evidence && evidence.slug) {
+    coreRaw = slugToCore(evidence.slug); // mechanical fallback (D8), still gated below
+  }
   if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
   // Quality gate (issue #5): background runs stay strict (issue #10).
   // A forced /autorename degrades instead of rejecting: the ambiguous
@@ -414,10 +427,14 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
 
   // Title is stable (core locked). Skip the write when nothing changed so the
   // title isn't churned every refresh.
-  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: locked || sel.substantive || opts.force, paused: false, pausedReason: undefined };
+  // issue #7: both write sites carry the evidence key the core was derived
+  // under, and a one-shot re-derive locks under the new evidence.
+  const nextLocked = locked || sel.substantive || Boolean(opts.force) || rederive;
+  const nextEvidenceKey = evidence ? evidence.key : st.evidenceKey;
+  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: nextLocked, evidenceKey: nextEvidenceKey, paused: false, pausedReason: undefined };
   const changed = title !== st.lastSetTitle;
   if (!changed) {
-    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: locked || sel.substantive || opts.force });
+    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: nextLocked, evidenceKey: nextEvidenceKey });
   } else {
     lastGeneratedName = title; // record ownership BEFORE writing so the
     pi.setSessionName(title);  // session_info_changed event isn't mistaken for a user rename
