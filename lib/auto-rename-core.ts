@@ -505,6 +505,14 @@ export function slugToCore(slug: string): string {
   return capTitle(cleaned.replace(/-/g, " "));
 }
 
+/** Re-derive once when the issue evidence changed (issue #7 D6): a core locked
+ *  before any evidence existed must not stay frozen once the issue subject is
+ *  known. Same key (or no evidence) keeps the lock. */
+export function shouldReDerive(st: { coreLocked?: boolean; evidenceKey?: string }, e: WorkEvidence | null): boolean {
+  if (!e) return false;
+  return (st.evidenceKey ?? "") !== e.key;
+}
+
 // ---- issue-driven work evidence (issue #7) -----------------------------------
 // The session's "issue under work" is recovered from tool calls and tool
 // results — the subject of an issue-driven session lives there, not in the

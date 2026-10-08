@@ -1,6 +1,6 @@
 // issue #7 — work-evidence extraction from tool calls / tool results,
 // plus its high-weight injection into the title prompt (evidencePromptBlock).
-import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock, slugToCore } from "../lib/auto-rename-core";
+import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock, slugToCore, shouldReDerive } from "../lib/auto-rename-core";
 import type { WorkEvidence } from "../lib/auto-rename-core";
 
 // zero-dep helpers, inlined (no test framework — same pattern as test/auto-rename-core.test.ts)
@@ -126,6 +126,13 @@ eq("slug expands to words", slugToCore("test-config-isolation"), "test config is
 eq("empty slug -> empty core", slugToCore(""), "");
 eq("junk slug normalized", slugToCore("Fix--Cursor!!"), "fix cursor");
 check("long slug capped at width", slugToCore("a-very-long-branch-slug-name-here").length <= 24);
+
+// ---- shouldReDerive evidence-key predicate (issue #7 task 4 / A5) ---
+const EV460: WorkEvidence = { issueNumber: 460, title: "t", slug: "s", key: "issue:460" };
+check("no evidence -> never re-derive", shouldReDerive({ coreLocked: true, evidenceKey: "issue:460" }, null) === false);
+check("evidence appeared (no stored key) -> re-derive", shouldReDerive({ coreLocked: true }, EV460) === true);
+check("same key -> no re-derive", shouldReDerive({ coreLocked: true, evidenceKey: "issue:460" }, EV460) === false);
+check("key changed -> re-derive", shouldReDerive({ coreLocked: true, evidenceKey: "issue:100" }, EV460) === true);
 
 if (failed > 0) { console.error(`${failed} check(s) failed`); process.exit(1); }
 console.log("all checks passed");
