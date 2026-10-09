@@ -271,7 +271,10 @@ export function coreIsNonGoal(core: string): boolean {
 }
 
 const META_SUBJECT = /(issue|pr|pull\s*request|github)/i;
-const META_ACTION = /(?:\b(?:list|review|triage)\b|retriev|compil|analy[sz]|查看|梳理|分析|列表|审查|汇总)/i; // PR #11 CR r2: word-bounded list/review/triage (checklist/preview escape), analy[sz] keeps verb/plural variants out, analytics stays out
+// PR #11 CR r2 word-bounded list/review/triage; analy[sz] keeps analytics out.
+// issue #7: + 中文流程动词（认领/处理/调研/关闭/筛选/评估/跟进/闭环）——`issue认领处理`
+// 类 core 曾整体漏过；META_SUBJECT 前置条件保证只影响含 issue/pr/github 的 core。
+const META_ACTION = /(?:\b(?:list|review|triage)\b|retriev|compil|analy[sz]|查看|梳理|分析|列表|审查|汇总|认领|处理|调研|关闭|筛选|评估|跟进|闭环)/i;
 
 /** True if a core labels the *process* (triaging/reviewing issues) instead of
  *  the *goal* — the classic junk title from orchestrated sessions whose first
@@ -418,9 +421,12 @@ export const SYSTEM_PROMPT_TEMPLATE =
   "- You LABEL the session, you do NOT participate. Never answer, greet, advise, " +
   "or role-play the conversation.\n" +
   "- Output a concise NOUN PHRASE (like a document title / folder name), NOT a sentence.\n" +
-  "- The CORE GOAL is the session's stable focus, NOT the issue/PR title verbatim and NOT " +
-  "transient activity like 'code review', 'CR polling', 'babysit', 'monitoring'. Two " +
-  "sessions on the same issue must have DIFFERENT cores reflecting their different work.\n" +
+  "- The CORE GOAL is the session's stable focus, NOT transient activity like 'code " +
+  "review', 'CR polling', 'babysit', 'monitoring'.\n" +
+  "- When a GITHUB ISSUE UNDER WORK block is present in the user message, the core MUST " +
+  "reflect that issue's subject matter — condensed from the issue title, not verbatim; " +
+  "add a short stage word (e.g. 调研/实现) only when it genuinely distinguishes this " +
+  "session's work. Without such a block, derive the core from the ORIGINAL INTENT only.\n" +
   "- Never start with: 好的/收到/没问题/当然/作为/我来/我会/我们可以/让我们/我将/感谢/" +
   "理解/明白/您好. No greetings, no first-person verbs, no advice.\n" +
   "- No sentence-ending punctuation (。.！？!). Do NOT include the repo name or any " +
@@ -461,22 +467,171 @@ export function systemPromptFor(force: boolean, lang: TitleLang): string {
  * ORIGINAL INTENT excerpt. Moved here from index.ts (issue #3 final review)
  * so the glue wiring is unit-testable.
  */
-export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, recent: string, prevTitle: string): string {
+export function buildUserPrompt(force: boolean, lang: TitleLang, early: string, recent: string, prevTitle: string, evidence?: WorkEvidence | null): string {
   let user = (force
-    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. " +
-      "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
-    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ") +
-    USER_PROMPT_LANG_LINE[lang] +
-    "what this one session is accomplishing. No punctuation, no repo name, no " +
-    "issue/PR numbers, no greetings/role-play.\n\n";
+    ? "Derive the session's CORE GOAL anchored on the ORIGINAL INTENT below. "
+      + "If the RECENT CONTEXT shows the session's actual focus has evolved, reflect the CURRENT focus. "
+    : "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. ")
+    + USER_PROMPT_LANG_LINE[lang]
+    + "what this one session is accomplishing. No punctuation, no repo name, no "
+    + "issue/PR numbers, no greetings/role-play.\n\n";
   if (recent) {
-    user += "RECENT CONTEXT (the session's latest user messages — if the actual " +
-      "focus has evolved beyond the original intent, reflect the CURRENT focus):\n" +
-      recent + "\n\n";
+    user += "RECENT CONTEXT (the session's latest user messages — if the actual "
+      + "focus has evolved beyond the original intent, reflect the CURRENT focus):\n"
+      + recent + "\n\n";
   }
   if (prevTitle) {
-    user += "Previous title: " + prevTitle + "\n\n";
+    user += (evidence
+      ? "Previous title (if it already reflects the GITHUB ISSUE subject, output it unchanged): "
+      : "Previous title: ") + prevTitle + "\n\n";
+  }
+  if (evidence) {
+    user += evidencePromptBlock(evidence) + "\n\n";
   }
   user += "ORIGINAL INTENT:\n" + early;
   return user;
+}
+
+/** The high-weight block naming the issue this session is actually working on
+ *  (issue #7): its subject matter MUST shape the core, condensed not verbatim. */
+export function evidencePromptBlock(e: WorkEvidence): string {
+  const subject = redact(e.title || e.slug); // secrets must not reach the model via the issue subject
+  const line = subject
+    ? `#${e.issueNumber} ${subject}`
+    : `#${e.issueNumber} (subject not captured; derive it from the ORIGINAL INTENT)`;
+  return "GITHUB ISSUE UNDER WORK (this session's actual work — its subject matter MUST be "
+    + "reflected in the core, condensed not verbatim):\n" + Array.from(line).slice(0, 400).join("");
+}
+
+/** Mechanical fallback core from a branch slug (issue #7 D8): expand kebab to
+ *  words and normalize via capTitle (word cap + display width + lowercase). */
+export function slugToCore(slug: string): string {
+  const cleaned = (slug || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!cleaned) return "";
+  return capTitle(cleaned.replace(/-/g, " "));
+}
+
+/** Re-derive once when the issue evidence changed (issue #7 D6): a core locked
+ *  before any evidence existed must not stay frozen once the issue subject is
+ *  known. Same key (or no evidence) keeps the lock. */
+export function shouldReDerive(st: { coreLocked?: boolean; evidenceKey?: string }, e: WorkEvidence | null): boolean {
+  if (!e) return false;
+  return (st.evidenceKey ?? "") !== e.key;
+}
+
+// ---- issue-driven work evidence (issue #7) -----------------------------------
+// The session's "issue under work" is recovered from tool calls and tool
+// results — the subject of an issue-driven session lives there, not in the
+// user prompts ("看一下 issue 460" names no subject). Zero network: the issue
+// title is parsed from `gh issue view` output already present in the
+// transcript. Signals are counted BINARY per issue (a worktree path appears
+// in dozens of later commands; occurrence counts would inflate it).
+
+export interface WorkEvidence {
+  issueNumber: number;
+  title: string;   // "" when the issue title was never captured
+  slug: string;    // "" when no issue-N-<slug> was seen
+  key: string;     // "issue:460" — state comparison key
+}
+
+// explicit issue mutations: the strongest claim ("working on", not "looking at")
+const RE_ISSUE_MUTATE = /gh\s+issue\s+(?:edit|close|reopen|comment)\s+(\d+)/g;
+// gh issue view N is weak: triage sessions view dozens of issues
+const RE_ISSUE_VIEW = /gh\s+issue\s+view\s+(\d+)/g;
+// branch / worktree slugs (issue-460-test-config-isolation) claim + carry a subject slug
+const RE_BRANCH_SLUG = /(?<![\w-])issue-(\d+)-([a-z0-9][a-z0-9-]{2,})/gi;
+// the github-issue-driven research/spec directory layout claims its issue
+const RE_DRIVEN_PATH = /github-issue-driven\/[^\s"'/]+\/[^\s"'/]+\/issue-(\d+)\//g;
+
+interface IssueSignals {
+  mutate: boolean; view: boolean; branch: boolean; path: boolean;
+  slug: string; title: string;
+}
+
+function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
+  const map = new Map<number, IssueSignals>();
+  const sig = (n: number): IssueSignals => {
+    let s = map.get(n);
+    if (!s) {
+      s = { mutate: false, view: false, branch: false, path: false, slug: "", title: "" };
+      map.set(n, s);
+    }
+    return s;
+  };
+  const claimSlug = (text: string) => {
+    for (const mm of text.matchAll(RE_BRANCH_SLUG)) {
+      const s = sig(Number(mm[1]));
+      s.branch = true;
+      if (!s.slug) s.slug = mm[2].toLowerCase();
+    }
+  };
+  for (const entry of branch) {
+    if (entry?.type !== "message" || !entry.message) continue;
+    const m = entry.message;
+    if (m.role === "assistant" && Array.isArray(m.content)) {
+      for (const b of m.content) {
+        if (b?.type !== "toolCall") continue;
+        const args = JSON.stringify(b.arguments ?? {});
+        for (const mm of args.matchAll(RE_ISSUE_MUTATE)) sig(Number(mm[1])).mutate = true;
+        for (const mm of args.matchAll(RE_ISSUE_VIEW)) sig(Number(mm[1])).view = true;
+        for (const mm of args.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
+        claimSlug(args);
+      }
+    }
+    if (m.role === "toolResult") {
+      const text = blockText(m.content);
+      if (!text) continue;
+      for (const mm of text.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
+      claimSlug(text);
+      captureIssueTitles(text, sig);
+    }
+  }
+  return map;
+}
+
+/** Pull `title:`/`number:` pairs (gh issue view plain) and {"number":N,
+ *  "title":"…"} (gh view --json, either key order) out of one tool result. */
+function captureIssueTitles(text: string, sig: (n: number) => IssueSignals): void {
+  const titles = [...text.matchAll(/^title:\t?(\S.*)$/gm)].map((m) => m[1].trim());
+  const numbers = [...text.matchAll(/^number:\t?(\d+)$/gm)].map((m) => Number(m[1]));
+  if (titles.length && titles.length === numbers.length) {
+    titles.forEach((t, i) => { const s = sig(numbers[i]); if (!s.title) s.title = t.slice(0, 200); });
+    return;
+  }
+  try { // whole-result JSON (gh issue view --json alone in the result)
+    const o = JSON.parse(text);
+    if (o && typeof o === "object" && typeof o.title === "string" && typeof o.number === "number") {
+      const s = sig(o.number);
+      if (!s.title) s.title = String(o.title).slice(0, 200);
+      return;
+    }
+  } catch { /* embedded in a bigger result — regex fallback below */ }
+  for (const mm of text.matchAll(/"number"\s*:\s*(\d+)[\s\S]{0,400}?"title"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
+    const s = sig(Number(mm[1]));
+    if (!s.title) { try { s.title = JSON.parse(`"${mm[2]}"`).slice(0, 200); } catch { /* keep "" */ } }
+  }
+  for (const mm of text.matchAll(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"[\s\S]{0,400}?"number"\s*:\s*(\d+)/g)) {
+    const s = sig(Number(mm[2]));
+    if (!s.title) { try { s.title = JSON.parse(`"${mm[1]}"`).slice(0, 200); } catch { /* keep "" */ } }
+  }
+}
+
+const W_MUTATE = 6, W_BRANCH = 3, W_PATH = 3, W_VIEW = 1;
+
+/** The single issue this session is WORKING on, or null. Requires a claim
+ *  signal (mutate/branch/path — binary) and a 2x lead over the runner-up;
+ *  view-only and ambiguous sessions deliberately yield no evidence. */
+export function extractWorkEvidence(branch: any[]): WorkEvidence | null {
+  const map = scanIssueSignals(branch);
+  const ranked = [...map.entries()]
+    .map(([n, s]) => ({
+      n, s,
+      w: (s.mutate ? W_MUTATE : 0) + (s.branch ? W_BRANCH : 0) + (s.path ? W_PATH : 0) + (s.view ? W_VIEW : 0),
+    }))
+    .sort((a, b) => b.w - a.w);
+  const top = ranked[0];
+  if (!top || !(top.s.mutate || top.s.branch || top.s.path)) return null; // no claim at all
+  const second = ranked[1];
+  if (second && top.w < 2 * second.w) return null;                        // ambiguous
+  return { issueNumber: top.n, title: top.s.title, slug: top.s.slug, key: `issue:${top.n}` };
 }

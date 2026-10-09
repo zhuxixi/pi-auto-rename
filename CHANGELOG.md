@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- issue-driven 会话标题证据抽取：从工具调用/返回识别「在做的 issue」（`gh issue view` 的标题/编号成对解析、认领/分支/研究路径信号，每 issue 二元计分 + 2x dominance），作为高权重块进入标题推导（issue #7）
+- `evidenceKey` 一次性自愈：证据出现后无视 coreLocked 重推一次，存量流程标签标题（`issue认领处理` 类）自动愈合
+- slug 机械兜底：模型失败且只有分支 slug 时展开为词组标题
+
+### Changed
+- system prompt：issue 证据在场时 core 必须浓缩反映 issue 主题（不再要求同 issue 会话标题互异）；金测随 spec 显式重写
+- 质量门中文扩词：认领/处理/调研/关闭/筛选/评估/跟进/闭环
+
 ## [0.2.1] - 2026-09-03
 
 ### Fixed

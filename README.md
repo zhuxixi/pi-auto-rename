@@ -132,6 +132,16 @@ Edit the file and run `/reload` to apply.
    `paused`) lives in the session file as `auto-rename-state` custom
    entries, so it survives reloads.
 
+**Issue evidence (issue #7)**: the extension also scans tool calls and
+their results for a GitHub issue "under work" — `gh issue view` output
+parsed for title/number pairs, plus claim/branch/research-path signals
+scored per issue with a 2x dominance margin. When evidence wins, it is
+injected into the title prompt as a high-weight block that requires the
+core to condense the issue's subject, and a new evidence key overrides
+the core lock for exactly one re-derive — so existing stage-label titles
+(`issue认领处理`-style) self-heal. Sessions with no issue evidence are
+untouched and derive titles exactly as before.
+
 ## Development
 
 ```bash

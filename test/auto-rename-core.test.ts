@@ -285,9 +285,12 @@ const GOLDEN_AUTO_SYSTEM_PROMPT =
   "- You LABEL the session, you do NOT participate. Never answer, greet, advise, " +
   "or role-play the conversation.\n" +
   "- Output a concise NOUN PHRASE (like a document title / folder name), NOT a sentence.\n" +
-  "- The CORE GOAL is the session's stable focus, NOT the issue/PR title verbatim and NOT " +
-  "transient activity like 'code review', 'CR polling', 'babysit', 'monitoring'. Two " +
-  "sessions on the same issue must have DIFFERENT cores reflecting their different work.\n" +
+  "- The CORE GOAL is the session's stable focus, NOT transient activity like 'code " +
+  "review', 'CR polling', 'babysit', 'monitoring'.\n" +
+  "- When a GITHUB ISSUE UNDER WORK block is present in the user message, the core MUST " +
+  "reflect that issue's subject matter — condensed from the issue title, not verbatim; " +
+  "add a short stage word (e.g. 调研/实现) only when it genuinely distinguishes this " +
+  "session's work. Without such a block, derive the core from the ORIGINAL INTENT only.\n" +
   "- Never start with: 好的/收到/没问题/当然/作为/我来/我会/我们可以/让我们/我将/感谢/" +
   "理解/明白/您好. No greetings, no first-person verbs, no advice.\n" +
   "- No sentence-ending punctuation (。.！？!). Do NOT include the repo name or any " +
@@ -303,6 +306,9 @@ eq("systemPromptFor auto golden (byte-identical to pre-issue#3)", systemPromptFo
 check("systemPromptFor force differs from strict", systemPromptFor(true, "auto") !== GOLDEN_AUTO_SYSTEM_PROMPT);
 check("systemPromptFor force carries soft anchor", systemPromptFor(true, "auto").includes("Derive the CORE GOAL anchored on the ORIGINAL INTENT"));
 check("systemPromptFor zh fills zh rule", systemPromptFor(false, "zh").includes(LANG_RULES.zh));
+check("system prompt carries issue-under-work rule", systemPromptFor(false, "auto").includes("GITHUB ISSUE UNDER WORK"));
+check("system prompt drops the same-issue-different-cores rule", !systemPromptFor(false, "auto").includes("must have DIFFERENT cores"));
+check("force template carries issue-under-work rule too", systemPromptFor(true, "auto").includes("GITHUB ISSUE UNDER WORK"));
 eq("buildUserPrompt auto strict golden",
   buildUserPrompt(false, "auto", "hello world", "", ""),
   "Derive the session's CORE GOAL ONLY from the ORIGINAL INTENT below. " +
@@ -331,6 +337,17 @@ check("qualityGate background fix login bug accepts", qualityGate("fix login bug
 check("qualityGate force fix login bug accepts", qualityGate("fix login bug", true).action === "accept");
 check("qualityGate background empty accepts", qualityGate("", false).action === "accept");
 check("qualityGate force empty accepts", qualityGate("", true).action === "accept");
+check("gate rejects issue认领处理 (bg)", qualityGate("issue认领处理", false).action === "reject");
+check("gate rejects issue初步调研 (bg)", qualityGate("issue初步调研", false).action === "reject");
+check("gate rejects 未认领issue筛选 (bg)", qualityGate("未认领issue筛选", false).action === "reject");
+check("gate rejects github issue 闭环 (bg)", qualityGate("github issue 闭环", false).action === "reject");
+// force 语义不回归（issue #5）
+check("force accepts issue认领处理", qualityGate("issue认领处理", true).action === "accept");
+check("force accepts issue 分析", qualityGate("issue 分析", true).action === "accept");
+// 扩词不误伤：目标本身含 issue 词但无流程动词
+check("clean issue-template core passes", qualityGate("issue模板优化", false).action === "accept");
+check("clean github-actions core passes", qualityGate("github actions修复", false).action === "accept");
+check("clean zh core passes", qualityGate("修复登录越界", false).action === "accept");
 
 // ---- gate message safety + outcome merge + notification level (issue #5) ----
 const rejMsg = formatQualityGateMessage({ action: "reject", rule: "coreIsMetaActivity" }, "Issue list triage");
