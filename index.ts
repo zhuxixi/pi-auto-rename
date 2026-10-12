@@ -114,6 +114,7 @@ const DEFAULT_CONFIG: AutoRenameConfig = {
 const MAX_NAME_TOKENS = 1024;   // generous: thinking-mode models burn tokens on reasoning
 const AI_TOTAL_BUDGET_MS = 30_000;
 const AI_ATTEMPT_TIMEOUT_MS = 12_000;
+const FINAL_BUDGET_MS = 5_000; // exit catch-all budget (spec D3)
 const STATE_ENTRY_TYPE = "auto-rename-state";
 
 let debugEnabled = false;
@@ -483,6 +484,7 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
 
 // ---- extension ------------------------------------------------------------------------
 let lastGeneratedName: string | undefined;
+let initialNameSeen: string | undefined; // session name at session_start (spec D6)
 
 export default function autoRename(pi: ExtensionAPI): void {
   loadConfig();
@@ -491,11 +493,16 @@ export default function autoRename(pi: ExtensionAPI): void {
 
   // Serialized runner shared by the periodic trigger and the /autorename
   // command: force and periodic runs can never interleave (issue #1 CR).
-  const runSerialized = async (ctx: ExtensionContext, force: boolean): Promise<AutoRenameResult | null> => {
-    if (running) return null; // a run is already in flight
+  const runSerialized = async (ctx: ExtensionContext, force: boolean, extra: { final?: boolean; signal?: AbortSignal } = {}): Promise<AutoRenameResult | null> => {
+    if (running) {
+      // Visible on purpose (spec R2-D3): the final run returns null silently —
+      // this log is the only trace that the exit catch-all was swallowed.
+      debugLog("run skipped: another run is in flight");
+      return null;
+    }
     running = true;
     try {
-      return await runAutoRename(pi, ctx, { force });
+      return await runAutoRename(pi, ctx, { force, ...extra });
     } finally {
       running = false;
     }
@@ -508,11 +515,17 @@ export default function autoRename(pi: ExtensionAPI): void {
       .catch((e) => debugLog(`run error: ${e instanceof Error ? e.message : String(e)}`));
   };
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     sessionCtx = ctx;
-    const st = readState(ctx.sessionManager.getBranch());
+    const branch = ctx.sessionManager.getBranch();
+    const st = readState(branch);
     lastGeneratedName = st.lastSetTitle; // reload-safe: recognize our own past writes
+    initialNameSeen = pi.getSessionName(); // D6: seed/initial name, not a user rename
     if (debugEnabled) debugLog(`restored state: ${JSON.stringify(st)}`);
+    if (shouldRenameOnStart({ reason: event.reason, lastRunEpoch: st.lastRunEpoch, hasUserMessages: scanUserMessages(branch).length > 0 })) {
+      debugLog(`session_start(${event.reason}): never named with content — self-healing`);
+      trigger(false);
+    }
   });
 
   // Manual-rename protection: an out-of-band name change pauses this session.
@@ -530,6 +543,18 @@ export default function autoRename(pi: ExtensionAPI): void {
 
   // Naming is best-effort background work; never hold pi's settled lifecycle.
   pi.on("agent_settled", () => trigger(false));
+
+  // Exit catch-all (issue #9 D4): a session that dies before its first settle
+  // still gets a title. pi awaits shutdown handlers, so a short budget is safe.
+  pi.on("session_shutdown", async (event, ctx) => {
+    try {
+      const st = readState(ctx.sessionManager.getBranch());
+      if (event.reason === "reload" || st.lastRunEpoch) return;
+      await runSerialized(ctx, false, { final: true, signal: AbortSignal.timeout(FINAL_BUDGET_MS) });
+    } catch (e) {
+      debugLog(`final run failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
 
   pi.registerCommand("autorename", {
     description: "Force a rename now (bypasses cooldown, pause, and core lock; re-derives with latest context)",
