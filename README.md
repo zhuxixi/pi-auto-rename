@@ -55,8 +55,9 @@ applies it via `pi.setSessionName()`.
 ## Requirements
 
 - **pi ≥ 0.84** recommended. The extension uses `pi.setSessionName()`,
-  `pi.appendEntry()`, and the `agent_settled` event; on older builds
-  these degrade to best-effort no-ops rather than crashing.
+  `pi.appendEntry()`, `pi.getSessionName()`, and the `agent_settled`,
+  `session_start`, `session_shutdown`, and `session_info_changed` events;
+  on older builds these degrade to best-effort no-ops rather than crashing.
 
 ## Installation
 

@@ -35,7 +35,10 @@
  *   * Best-effort everywhere: never throws into pi's event loop.
  *
  * State lives in the session file as `auto-rename-state` custom entries
- * ({lastRunEpoch, lastSetTitle, lastCore, paused, pausedReason}).
+ * ({lastRunEpoch, lastSetTitle, lastCore, coreLocked, evidenceKey, paused,
+ * pausedReason}); the mechanical greetings-only write site deliberately
+ * carries no lastRunEpoch (spec R1-D1) so the cooldown can never block a
+ * later substantive upgrade.
  *
  * Controls:
  *   * ~/.pi/agent/auto-rename.json  {enabled, model, firstAfterMin, repeatEveryMin, maxCoreWidth, debug, lang}
