@@ -27,6 +27,11 @@ async function runGreetingSettle(startedAtSec: number) {
   return h;
 }
 
+/** Last `auto-rename-state` entry the harness saw written (pins the age-plumbing seam). */
+function lastState(h: { entries: { customType: string; data: any }[] }): Record<string, any> {
+  return h.entries.filter((e) => e.customType === "auto-rename-state").at(-1)?.data ?? {};
+}
+
 // A5: 首个 settle 即命名（不等 5 分钟），琐碎锚点零模型调用
 const h = await runGreetingSettle(Date.now() / 1000 - 10);
 eq("greeting session named at first settle", h.names.at(-1), "Greeting exchange");
@@ -35,6 +40,42 @@ check("state written without lastRunEpoch (A4)", () => {
   const last = h.entries.at(-1)?.data ?? {};
   if (last.lastRunEpoch !== undefined) throw new Error(`lastRunEpoch must stay unset, got ${last.lastRunEpoch}`);
 });
+// A4: 问候 → 真问题即时升级（机械跑不写 lastRunEpoch，冷却挡不住升级）
+{
+  resetStub();
+  const branch = [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } }];
+  const sessionFile = writeSessionFile(join(home, "s10"), Date.now() / 1000 - 10, ["hello"]);
+  const h = makeHarness({ sessionFile, branch, sessionName: "hello" });
+  autoRename(h.pi);
+  await h.fire("session_start", { reason: "resume" });
+  await new Promise((r) => setTimeout(r, 50)); // trigger() runs detached
+  await h.fire("agent_settled");
+  await new Promise((r) => setTimeout(r, 50));
+  eq("greeting-only session named mechanically", h.names.at(-1), "Greeting exchange");
+  check("mechanical state carries no lastRunEpoch", () => {
+    if (lastState(h).lastRunEpoch !== undefined) throw new Error(`lastRunEpoch must stay unset, got ${lastState(h).lastRunEpoch}`);
+  });
+  branch.push({ type: "message", message: { role: "user", content: [{ type: "text", text: "hello fix the bug" }] } });
+  await h.fire("agent_settled");
+  await new Promise((r) => setTimeout(r, 50));
+  eq("real question upgrades the title without a cooldown wait", h.names.at(-1), "fix login bug");
+  eq("only the upgrade run called the model", stubState.calls, 1);
+}
+// 年龄接缝：年轻（10s < firstAfterMin）且有实质内容 → 首个 settle 即命名，但核心未锁
+{
+  resetStub();
+  const branch = [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hello fix the bug" }] } }];
+  const sessionFile = writeSessionFile(join(home, "s11"), Date.now() / 1000 - 10, ["hello fix the bug"]);
+  const h = makeHarness({ sessionFile, branch, sessionName: "hello" });
+  autoRename(h.pi);
+  await h.fire("session_start", { reason: "reload" }); // reload：不自愈，只验证 settle 路径
+  await new Promise((r) => setTimeout(r, 50));
+  eq("reload start leaves the session unnamed", h.names.length, 0);
+  await h.fire("agent_settled");
+  await new Promise((r) => setTimeout(r, 50));
+  eq("young substantive session is named at first settle", h.names.at(-1), "fix login bug");
+  eq("young session state written with coreLocked false", lastState(h).coreLocked, false);
+}
 // A7: 重开自愈（有内容、从未命名、非 reload）
 {
   resetStub();
@@ -45,6 +86,7 @@ check("state written without lastRunEpoch (A4)", () => {
   await h.fire("session_start", { reason: "resume" });
   await new Promise((r) => setTimeout(r, 50));
   eq("resume self-heal names the session", h.names.at(-1), "fix login bug");
+  eq("old session (600s) state written with coreLocked true", lastState(h).coreLocked, true);
 }
 // A7 反例：reload 不自愈
 {
