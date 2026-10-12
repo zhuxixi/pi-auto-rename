@@ -1,4 +1,4 @@
-import { renameDue, coreLocksNow, capTitle, trivialCore, shouldRenameOnStart, formatStatusLine } from "../lib/auto-rename-core";
+import { MAX_CORE_WIDTH, renameDue, coreLocksNow, capTitle, truncateDisplay, trivialCore, shouldRenameOnStart, formatStatusLine } from "../lib/auto-rename-core";
 import { check, eq, summary } from "./support/assert";
 
 // A1: 首个 run 不再看墙钟（issue #9 D1）
@@ -27,6 +27,8 @@ eq("trivial core zh", trivialCore("zh"), "问候交流");
 eq("trivial core auto", trivialCore("auto"), "Greeting exchange");
 eq("trivial core en", trivialCore("en"), "Greeting exchange");
 eq("trivial core is capTitle-stable", capTitle(trivialCore("zh"), 5, 24), "问候交流");
+eq("trivial core zh fits maxCoreWidth", truncateDisplay(trivialCore("zh"), MAX_CORE_WIDTH), trivialCore("zh"));
+eq("trivial core en fits maxCoreWidth", truncateDisplay(trivialCore("en"), MAX_CORE_WIDTH), trivialCore("en"));
 
 // A7: 非 reload、从未命名、有内容 → 自愈
 eq("resume never named with content", shouldRenameOnStart({ reason: "resume", hasUserMessages: true }), true);
