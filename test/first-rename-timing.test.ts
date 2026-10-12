@@ -26,7 +26,7 @@ eq("evidence re-derive locks a trivial anchor too", coreLocksNow({ substantive: 
 eq("trivial core zh", trivialCore("zh"), "问候交流");
 eq("trivial core auto", trivialCore("auto"), "Greeting exchange");
 eq("trivial core en", trivialCore("en"), "Greeting exchange");
-eq("trivial core is capTitle-stable", capTitle(trivialCore("zh"), 5, 24), "问候交流");
+eq("trivial core zh survives capTitle", capTitle(trivialCore("zh"), 5, 24), "问候交流");
 eq("trivial core zh fits maxCoreWidth", truncateDisplay(trivialCore("zh"), MAX_CORE_WIDTH), trivialCore("zh"));
 eq("trivial core en fits maxCoreWidth", truncateDisplay(trivialCore("en"), MAX_CORE_WIDTH), trivialCore("en"));
 

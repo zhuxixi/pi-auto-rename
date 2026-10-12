@@ -442,8 +442,10 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
 
   // Title is stable (core locked). Skip the write when nothing changed so the
   // title isn't churned every refresh.
-  // issue #7: both write sites carry the evidence key the core was derived
-  // under, and a one-shot re-derive locks under the new evidence.
+  // issue #7: the two substantive write sites carry the evidence key the core
+  // was derived under, and a one-shot re-derive locks under the new evidence;
+  // the mechanical write site below deliberately omits lastRunEpoch (spec
+  // R1-D1) so the cooldown can never block a later substantive upgrade.
   const nextLocked = mechanical
     ? false
     : coreLocksNow({
@@ -457,11 +459,13 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   const nextEvidenceKey = evidence ? evidence.key : st.evidenceKey;
   const changed = title !== st.lastSetTitle;
   if (mechanical) {
-    // Third state write point (spec R1-D1): no lastRunEpoch on purpose.
+    // Third state write point (spec R1-D1): no lastRunEpoch on purpose; clears
+    // pause/pausedReason like the substantive sites, so a forced rename on a
+    // paused greetings-only session resumes rather than staying paused.
     if (!changed) return { reason: "unchanged (trivial)" };
     lastGeneratedName = title;
     pi.setSessionName(title);
-    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastSetTitle: title, lastCore: core, coreLocked: false });
+    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastSetTitle: title, lastCore: core, coreLocked: false, paused: false, pausedReason: undefined });
     syncBoardName(ctx, title);
     return { title, reason: "renamed (trivial)", warning: false };
   }
