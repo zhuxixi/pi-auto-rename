@@ -537,6 +537,26 @@ export function renameDue(input: {
   return input.nowSec - input.st.lastRunEpoch >= input.repeatEveryMin * 60;
 }
 
+/**
+ * Whether the core locks on this run (issue #9 D2). The 5-minute window keeps
+ * its original purpose — "wait until the intent settles" — but now as a
+ * correction window: a title exists from the first settle, and only a
+ * substantive anchor that is at least firstAfterMin old gets frozen.
+ * Already-locked cores, force, and evidence re-derives always lock.
+ */
+export function coreLocksNow(input: {
+  alreadyLocked?: boolean;
+  substantive: boolean;
+  ageSec: number;
+  firstAfterMin: number;
+  force?: boolean;
+  rederive?: boolean;
+}): boolean {
+  if (input.alreadyLocked) return true;
+  if (input.force || input.rederive) return true;
+  return input.substantive && input.ageSec >= input.firstAfterMin * 60;
+}
+
 // ---- issue-driven work evidence (issue #7) -----------------------------------
 // The session's "issue under work" is recovered from tool calls and tool
 // results — the subject of an issue-driven session lives there, not in the
