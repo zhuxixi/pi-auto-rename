@@ -557,6 +557,13 @@ export function coreLocksNow(input: {
   return input.substantive && input.ageSec >= input.firstAfterMin * 60;
 }
 
+/** Mechanical core for a session whose whole early window is greetings
+ *  (issue #9 D4): zero model cost, no quality gate, and the caller must NOT
+ *  lock the core nor consume the rename cooldown. */
+export function trivialCore(lang: TitleLang): string {
+  return lang === "zh" ? "问候交流" : "Greeting exchange";
+}
+
 // ---- issue-driven work evidence (issue #7) -----------------------------------
 // The session's "issue under work" is recovered from tool calls and tool
 // results — the subject of an issue-driven session lives there, not in the

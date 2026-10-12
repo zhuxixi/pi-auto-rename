@@ -1,4 +1,4 @@
-import { renameDue, coreLocksNow } from "../lib/auto-rename-core";
+import { renameDue, coreLocksNow, capTitle, trivialCore } from "../lib/auto-rename-core";
 import { eq, summary } from "./support/assert";
 
 // A1: 首个 run 不再看墙钟（issue #9 D1）
@@ -21,4 +21,10 @@ eq("force locks regardless of age", coreLocksNow({ substantive: true, ageSec: 1,
 eq("evidence re-derive locks", coreLocksNow({ substantive: true, ageSec: 1, firstAfterMin: 5, rederive: true }), true);
 eq("force locks a trivial anchor too", coreLocksNow({ substantive: false, ageSec: 1, firstAfterMin: 5, force: true }), true);
 eq("evidence re-derive locks a trivial anchor too", coreLocksNow({ substantive: false, ageSec: 1, firstAfterMin: 5, rederive: true }), true);
+
+// A3: 纯问候窗口的机械标题（issue #9 D4）——零模型成本，本地生成
+eq("trivial core zh", trivialCore("zh"), "问候交流");
+eq("trivial core auto", trivialCore("auto"), "Greeting exchange");
+eq("trivial core en", trivialCore("en"), "Greeting exchange");
+eq("trivial core is capTitle-stable", capTitle(trivialCore("zh"), 5, 24), "问候交流");
 summary();
