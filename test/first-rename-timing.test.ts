@@ -1,5 +1,5 @@
-import { renameDue, coreLocksNow, capTitle, trivialCore, shouldRenameOnStart } from "../lib/auto-rename-core";
-import { eq, summary } from "./support/assert";
+import { renameDue, coreLocksNow, capTitle, trivialCore, shouldRenameOnStart, formatStatusLine } from "../lib/auto-rename-core";
+import { check, eq, summary } from "./support/assert";
 
 // A1: 首个 run 不再看墙钟（issue #9 D1）
 eq("first run due at age 0", renameDue({ st: {}, nowSec: 1000, repeatEveryMin: 3 }), true);
@@ -35,4 +35,14 @@ eq("reload is skipped", shouldRenameOnStart({ reason: "reload", hasUserMessages:
 eq("already named is skipped", shouldRenameOnStart({ reason: "resume", hasUserMessages: true, lastRunEpoch: 1 }), false);
 eq("empty session is skipped", shouldRenameOnStart({ reason: "new", hasUserMessages: false }), false);
 eq("unknown reason is allowed (defensive)", shouldRenameOnStart({ reason: "", hasUserMessages: true }), true);
+
+const line = formatStatusLine({ lastSetTitle: "Fix login bug", lastCore: "fix login bug", coreLocked: true, paused: false, lastRunEpoch: 1000 }, { firstAfterMin: 5 });
+check("status keeps legacy fields", () => {
+  for (const frag of ["title=Fix login bug", "core=fix login bug", "locked=yes", "paused=no", "lastRun="]) {
+    if (!line.includes(frag)) throw new Error(`missing ${frag} in ${line}`);
+  }
+});
+eq("status carries timing marker", line.endsWith("timing=first@settle,lock@5m"), true);
+eq("empty state renders (none)", formatStatusLine({}, { firstAfterMin: 7 }).includes("title=(none) core=(none)"), true);
+eq("marker follows config", formatStatusLine({}, { firstAfterMin: 7 }).endsWith("timing=first@settle,lock@7m"), true);
 summary();

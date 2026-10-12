@@ -582,6 +582,23 @@ export function shouldRenameOnStart(input: {
   return input.hasUserMessages;
 }
 
+/**
+ * One-line `/autorename-status` text (issue #9 D9). The trailing
+ * `timing=first@settle,lock@<n>m` marker is also the deployment self-proof:
+ * a copy without the new timing semantics cannot print it, so user tests can
+ * verify the loaded code before trusting their results.
+ */
+export function formatStatusLine(
+  st: { lastSetTitle?: string; lastCore?: string; coreLocked?: boolean; paused?: boolean; pausedReason?: string; lastRunEpoch?: number },
+  config: { firstAfterMin: number },
+): string {
+  return `auto-rename: title=${st.lastSetTitle ?? "(none)"} core=${st.lastCore ?? "(none)"} ` +
+    `locked=${st.coreLocked ? "yes" : "no"} ` +
+    `paused=${st.paused ? st.pausedReason ?? "yes" : "no"} ` +
+    `lastRun=${st.lastRunEpoch ? new Date(st.lastRunEpoch * 1000).toLocaleTimeString() : "never"} ` +
+    `timing=first@settle,lock@${config.firstAfterMin}m`;
+}
+
 // ---- issue-driven work evidence (issue #7) -----------------------------------
 // The session's "issue under work" is recovered from tool calls and tool
 // results — the subject of an issue-driven session lives there, not in the
