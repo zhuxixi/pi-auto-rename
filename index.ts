@@ -1,11 +1,12 @@
 /**
  * auto-rename — AI session naming for Pi: derives a short CORE GOAL title.
  *
- * After a session has been alive FIRST_AFTER_MIN minutes, and then every
- * REPEAT_EVERY_MIN minutes, it derives a concise title naming what this one
+ * At the first agent_settled with content — and then every
+ * REPEAT_EVERY_MIN minutes — it derives a concise title naming what this one
  * session is accomplishing (its CORE GOAL), applies it via pi.setSessionName(),
  * and mirrors it into the agent-board view meta.json (absorbing
- * agent-board-name-sync's job).
+ * agent-board-name-sync's job). FIRST_AFTER_MIN no longer gates the first
+ * rename; it now gates when the core locks (issue #9).
  *
  * The title is JUST the core goal — no `owner/repo:` prefix and no
  * `| issue#N PR#N` suffix. Repo, branch, issue, and PR context belong in the
@@ -56,10 +57,12 @@ import {
   coreFromTitle,
   coreIsMetaActivity,
   coreIsNonGoal,
+  coreLocksNow,
   earlyExcerpt,
   earlySelection,
   extractWorkEvidence,
   formatQualityGateMessage,
+  formatStatusLine,
   gateAwareOutcome,
   latestSelection,
   looksLikeError,
@@ -68,9 +71,12 @@ import {
   parseIso,
   qualityGate,
   redact,
+  renameDue,
   scanUserMessages,
   shouldReDerive,
+  shouldRenameOnStart,
   slugToCore,
+  trivialCore,
   truncateDisplay,
   buildUserPrompt,
   resolveLang,
@@ -88,7 +94,7 @@ const CONFIG_PATH = join(homedir(), ".pi", "agent", "auto-rename.json");
 interface AutoRenameConfig {
   enabled: boolean;
   model: string;            // "provider/modelId" in pi's model registry
-  firstAfterMin: number;    // first rename after this many minutes of session life
+  firstAfterMin: number;    // minutes of session life before the core locks (issue #9)
   repeatEveryMin: number;   // re-rename cadence after the first rename
   maxCoreWidth: number;     // core-goal cap in display columns (CJK counts 2)
   debug: boolean;
@@ -246,13 +252,13 @@ async function llmOnce(rt: LlmRuntime, userContent: string, correctionHint?: str
  * prevCore is passed empty and recent/prevTitle feed the prompt instead, so the
  * model re-derives with the latest context (issue #1).
  */
-async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false, lang: TitleLang, evidence: WorkEvidence | null = null): Promise<string | null> {
+async function generateCore(rt: LlmRuntime, early: string, prevCore: string, recent = "", prevTitle = "", force = false, lang: TitleLang, evidence: WorkEvidence | null = null, signal?: AbortSignal): Promise<string | null> {
   if (!early) return null;
   if (prevCore) return prevCore; // locked; no model call needed
   const user = buildUserPrompt(force, lang, early, recent, prevTitle, evidence);
   const core = await llmOnce(rt, user,
     "Wrong: that was a sentence/response, not a title. Output ONLY a short noun-phrase title, nothing else.",
-    undefined, systemPromptFor(force, lang));
+    signal, systemPromptFor(force, lang));
   return core || null;
 }
 
@@ -349,7 +355,7 @@ interface AutoRenameResult {
   warning?: boolean;
 }
 
-async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { force?: boolean } = {}): Promise<AutoRenameResult> {
+async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { force?: boolean; final?: boolean; signal?: AbortSignal } = {}): Promise<AutoRenameResult> {
   const config = loadConfig();
   if (!config.enabled) return { reason: "globally disabled" };
 
@@ -360,17 +366,13 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   const sessionFile = ctx.sessionManager.getSessionFile();
   const now = Date.now() / 1000;
 
-  // due check
-  if (!opts.force) {
-    let due: boolean;
-    if (st.lastRunEpoch) {
-      due = now - st.lastRunEpoch >= config.repeatEveryMin * 60;
-    } else {
-      const start = (sessionFile ? firstTimestamp(sessionFile) : null) ?? now;
-      due = now - start >= config.firstAfterMin * 60;
-    }
-    if (!due) return { reason: "not due yet" };
+  // due check (issue #9 D1): the first run is due as soon as the session has
+  // content — firstAfterMin now gates the core lock, not the first title.
+  if (!renameDue({ st, nowSec: now, repeatEveryMin: config.repeatEveryMin, force: opts.force, final: opts.final })) {
+    return { reason: "not due yet" };
   }
+  const sessionStartSec = (sessionFile ? firstTimestamp(sessionFile) : null) ?? now;
+  const ageSec = now - sessionStartSec;
 
   const userMsgs = scanUserMessages(branch);
   const sel = earlySelection(userMsgs);
@@ -399,40 +401,70 @@ async function runAutoRename(pi: ExtensionAPI, ctx: ExtensionContext, opts: { fo
   const rederive = shouldReDerive(st, evidence);
   const locked = !opts.force && Boolean(st.coreLocked && prevCore) && !rederive;
 
-  const rt = await buildLlmRuntime(ctx);
-  if (!rt) return { reason: "no usable model (registry auth failed)" };
+  // Mechanical path (issue #9 D3): a greetings-only session gets a local core —
+  // no model call, no quality gate, and no lastRunEpoch (so the cooldown can
+  // never block the upgrade once real content arrives).
+  const mechanical = !sel.substantive;
+  let coreRaw = "";
+  let gate: ReturnType<typeof qualityGate> | undefined;
+  if (mechanical) {
+    coreRaw = trivialCore(config.lang);
+  } else {
+    const rt = await buildLlmRuntime(ctx);
+    if (!rt) return { reason: "no usable model (registry auth failed)" };
 
-  // redact secrets before anything goes to the model
-  const safeEarly = redact(early);
-  const promptForce = Boolean(opts.force) || rederive;
-  const recent = promptForce ? redact(latestSelection(userMsgs)) : "";
-  let coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, promptForce ? redact(prevCore) : "", promptForce, config.lang, evidence);
-  if (!coreRaw && evidence && evidence.slug) {
-    coreRaw = slugToCore(evidence.slug); // mechanical fallback (D8), still gated below
-  }
-  if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
-  // Quality gate (issue #5): background runs stay strict (issue #10).
-  // A forced /autorename degrades instead of rejecting: the ambiguous
-  // meta filter is skipped and non-goal cores are accepted with a
-  // warning, so an explicit request always yields a title.
-  const gate = locked ? undefined : qualityGate(coreRaw, Boolean(opts.force));
-  if (gate && gate.action === "reject") {
-    const reason = formatQualityGateMessage(gate, coreRaw);
-    debugLog(reason);
-    return { reason };
+    // redact secrets before anything goes to the model
+    const safeEarly = redact(early);
+    const promptForce = Boolean(opts.force) || rederive;
+    const recent = promptForce ? redact(latestSelection(userMsgs)) : "";
+    coreRaw = await generateCore(rt, safeEarly, locked ? prevCore : "", recent, promptForce ? redact(prevCore) : "", promptForce, config.lang, evidence, opts.signal);
+    if (!coreRaw && evidence && evidence.slug) {
+      coreRaw = slugToCore(evidence.slug); // mechanical fallback (D8), still gated below
+    }
+    if (!coreRaw) return { reason: "llm failed; backed off" }; // keep current title, retry next period
+    // Quality gate (issue #5): background runs stay strict (issue #10).
+    // A forced /autorename degrades instead of rejecting: the ambiguous
+    // meta filter is skipped and non-goal cores are accepted with a
+    // warning, so an explicit request always yields a title.
+    gate = locked ? undefined : qualityGate(coreRaw, Boolean(opts.force));
+    if (gate && gate.action === "reject") {
+      const reason = formatQualityGateMessage(gate, coreRaw);
+      debugLog(reason);
+      return { reason };
+    }
   }
 
-  const core = capTitle(locked && prevCore ? prevCore : coreRaw, MAX_TITLE_WORDS, cw);
+  // trivialCore is already curated (fixed case, fixed width) — capTitle's
+  // lowercase normalization (D7) must not touch the mechanical core.
+  const core = mechanical ? coreRaw : capTitle(locked && prevCore ? prevCore : coreRaw, MAX_TITLE_WORDS, cw);
   const title = composeTitle(core);
 
   // Title is stable (core locked). Skip the write when nothing changed so the
   // title isn't churned every refresh.
   // issue #7: both write sites carry the evidence key the core was derived
   // under, and a one-shot re-derive locks under the new evidence.
-  const nextLocked = locked || sel.substantive || Boolean(opts.force) || rederive;
+  const nextLocked = mechanical
+    ? false
+    : coreLocksNow({
+        alreadyLocked: locked,
+        substantive: sel.substantive,
+        ageSec,
+        firstAfterMin: config.firstAfterMin,
+        force: Boolean(opts.force),
+        rederive,
+      });
   const nextEvidenceKey = evidence ? evidence.key : st.evidenceKey;
-  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: nextLocked, evidenceKey: nextEvidenceKey, paused: false, pausedReason: undefined };
   const changed = title !== st.lastSetTitle;
+  if (mechanical) {
+    // Third state write point (spec R1-D1): no lastRunEpoch on purpose.
+    if (!changed) return { reason: "unchanged (trivial)" };
+    lastGeneratedName = title;
+    pi.setSessionName(title);
+    pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastSetTitle: title, lastCore: core, coreLocked: false });
+    syncBoardName(ctx, title);
+    return { title, reason: "renamed (trivial)", warning: false };
+  }
+  const newState: AutoRenameState = { ...st, lastRunEpoch: now, lastSetTitle: title, lastCore: core, coreLocked: nextLocked, evidenceKey: nextEvidenceKey, paused: false, pausedReason: undefined };
   if (!changed) {
     pi.appendEntry(STATE_ENTRY_TYPE, { ...st, lastRunEpoch: now, lastCore: core, coreLocked: nextLocked, evidenceKey: nextEvidenceKey });
   } else {
@@ -537,12 +569,7 @@ export default function autoRename(pi: ExtensionAPI): void {
     description: "Show auto-rename state for this session",
     handler: async (_args, ctx) => {
       const st = readState(ctx.sessionManager.getBranch());
-      ctx.ui.notify(
-        `auto-rename: title=${st.lastSetTitle ?? "(none)"} core=${st.lastCore ?? "(none)"} ` +
-        `locked=${st.coreLocked ? "yes" : "no"} ` +
-        `paused=${st.paused ? st.pausedReason ?? "yes" : "no"} lastRun=${st.lastRunEpoch ? new Date(st.lastRunEpoch * 1000).toLocaleTimeString() : "never"}`,
-        "info",
-      );
+      ctx.ui.notify(formatStatusLine(st, loadConfig()), "info");
     },
   });
 }
