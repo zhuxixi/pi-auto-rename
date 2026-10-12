@@ -18,7 +18,8 @@ for t in test/*.test.ts; do
   name="$(basename "$t" .ts)"
   out="$tmpdir/$name.mjs"
   echo "=== $t ==="
-  if ! npx esbuild "$t" --bundle --format=esm --platform=node --outfile="$out" --log-level=warning; then
+  if ! npx esbuild "$t" --bundle --format=esm --platform=node --outfile="$out" --log-level=warning \
+      --alias:@earendil-works/pi-ai/compat=./test/support/pi-ai-stub.ts; then
     echo "BUNDLE-FAIL $t"
     failed_count=$((failed_count + 1))
     failed_files+=("$t (bundle)")
