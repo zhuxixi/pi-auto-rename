@@ -19,4 +19,6 @@ eq("trivial never locks", coreLocksNow({ substantive: false, ageSec: 9999, first
 eq("already locked stays locked", coreLocksNow({ alreadyLocked: true, substantive: false, ageSec: 1, firstAfterMin: 5 }), true);
 eq("force locks regardless of age", coreLocksNow({ substantive: true, ageSec: 1, firstAfterMin: 5, force: true }), true);
 eq("evidence re-derive locks", coreLocksNow({ substantive: true, ageSec: 1, firstAfterMin: 5, rederive: true }), true);
+eq("force locks a trivial anchor too", coreLocksNow({ substantive: false, ageSec: 1, firstAfterMin: 5, force: true }), true);
+eq("evidence re-derive locks a trivial anchor too", coreLocksNow({ substantive: false, ageSec: 1, firstAfterMin: 5, rederive: true }), true);
 summary();
