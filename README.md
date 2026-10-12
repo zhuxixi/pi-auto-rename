@@ -97,7 +97,7 @@ The config file is created automatically on first load at
 | --------------- | --------------------------- | ---------------------------------------------- |
 | `enabled`       | `true`                      | Master switch                                  |
 | `model`         | `"deepseek/deepseek-v4-flash"` | `provider/modelId` in pi's model registry   |
-| `firstAfterMin` | `5`                         | First rename after this many minutes of session life |
+| `firstAfterMin` | `5`                         | Core-lock delay: the title appears at the first settle and stays re-derivable until the session is this old |
 | `repeatEveryMin`| `3`                         | Re-rename cadence after the first rename       |
 | `maxCoreWidth`  | `24`                        | Core-goal cap in display columns (CJK counts 2) |
 | `debug`         | `false`                     | Verbose logging to stderr                      |
@@ -116,8 +116,12 @@ Edit the file and run `/reload` to apply.
 
 ## How It Works
 
-1. On `agent_settled`, the extension checks whether the session is due
-   (first rename after `firstAfterMin`, then every `repeatEveryMin`).
+1. On the first `agent_settled` that has user content, the extension names the
+   session immediately (no wall-clock wait); after that it re-checks every
+   `repeatEveryMin`. The core locks once the session is `firstAfterMin` old, so
+   early titles stay correctable. A session that ends first gets one final
+   attempt on `session_shutdown`, and a never-named session is named when it is
+   reopened.
 2. It scans the transcript for the first substantive user prompts
    (greetings/acks skipped) — the session's ORIGINAL INTENT.
 3. Secrets are redacted, then the excerpt is sent to the configured
