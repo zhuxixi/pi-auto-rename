@@ -22,7 +22,7 @@ eq("evidence re-derive locks", coreLocksNow({ substantive: true, ageSec: 1, firs
 eq("force locks a trivial anchor too", coreLocksNow({ substantive: false, ageSec: 1, firstAfterMin: 5, force: true }), true);
 eq("evidence re-derive locks a trivial anchor too", coreLocksNow({ substantive: false, ageSec: 1, firstAfterMin: 5, rederive: true }), true);
 
-// A3: 纯问候窗口的机械标题（issue #9 D4）——零模型成本，本地生成
+// A3: 纯问候窗口的机械标题（issue #9 D3）——零模型成本，本地生成
 eq("trivial core zh", trivialCore("zh"), "问候交流");
 eq("trivial core auto", trivialCore("auto"), "Greeting exchange");
 eq("trivial core en", trivialCore("en"), "Greeting exchange");
