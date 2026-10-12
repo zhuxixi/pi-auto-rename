@@ -564,6 +564,24 @@ export function trivialCore(lang: TitleLang): string {
   return lang === "zh" ? "问候交流" : "Greeting exchange";
 }
 
+/**
+ * Whether session_start should self-heal a never-named session that already
+ * has content (issue #9 D5) — reopening an old view names it immediately.
+ * Defensive by design: only an explicit "reload" is skipped, so an SDK reason
+ * rename can never silently disable the self-heal.
+ * SDK: SessionStartEvent.reason ∈ startup|reload|new|resume|fork
+ * (@earendil-works/pi-coding-agent dist/core/extensions/types.d.ts:562-568).
+ */
+export function shouldRenameOnStart(input: {
+  reason: string;
+  lastRunEpoch?: number;
+  hasUserMessages: boolean;
+}): boolean {
+  if (input.reason === "reload") return false;
+  if (input.lastRunEpoch) return false;
+  return input.hasUserMessages;
+}
+
 // ---- issue-driven work evidence (issue #7) -----------------------------------
 // The session's "issue under work" is recovered from tool calls and tool
 // results — the subject of an issue-driven session lives there, not in the
