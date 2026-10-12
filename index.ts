@@ -539,7 +539,11 @@ export default function autoRename(pi: ExtensionAPI): void {
     lastGeneratedName = name;
     const st = readState(ctx.sessionManager.getBranch());
     if (st.paused) return; // already paused — don't pile up duplicate entries (issue #10)
-    if (st.lastSetTitle && name !== st.lastSetTitle) {
+    // issue #9 D6: a session that was never auto-named still protects the
+    // user's own rename — anything other than our last title AND other than the
+    // name seen at session_start (board seed / replayed seed) is a user rename.
+    const ours = name === st.lastSetTitle || name === initialNameSeen;
+    if (!ours) {
       pi.appendEntry(STATE_ENTRY_TYPE, { ...st, paused: true, pausedReason: "manual_rename" });
       debugLog(`manual rename detected (${name}); session paused`);
     }

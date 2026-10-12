@@ -123,4 +123,54 @@ check("state written without lastRunEpoch (A4)", () => {
     if (h.entries.some((e) => e.customType === "auto-rename-state")) throw new Error("state written on collision");
   });
 }
+// A9: 首跑期手工改名 → 暂停；随后 settle/final 不再改写；种子名重放不暂停
+{
+  resetStub();
+  const branch = [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hello fix the bug" }] } }];
+  const sessionFile = writeSessionFile(join(home, "s7"), Date.now() / 1000 - 600, ["hello fix the bug"]);
+  const h = makeHarness({ sessionFile, branch, sessionName: "hello" });
+  autoRename(h.pi);
+  await h.fire("session_start", { reason: "resume" });
+  await new Promise((r) => setTimeout(r, 50));
+  const namedOnce = h.names.length;
+  await h.fire("session_info_changed", { name: "my own title" });   // 用户在首轮锁定前改名
+  await h.fire("agent_settled");
+  await h.fire("session_shutdown", { reason: "quit" });
+  await new Promise((r) => setTimeout(r, 50));
+  eq("manual rename freezes the session", h.names.length, namedOnce);
+  check("paused with manual_rename reason", () => {
+    const st = h.entries.filter((e) => e.customType === "auto-rename-state").at(-1)?.data ?? {};
+    if (st.paused !== true || st.pausedReason !== "manual_rename") throw new Error(`bad state ${JSON.stringify(st)}`);
+  });
+}
+// A9 窗口：reload 启动（不自愈）→ 从未自动命名 → 手工改名仍须暂停（旧守卫要求 lastSetTitle 存在，此处为盲区）
+{
+  resetStub();
+  const branch = [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hello fix the bug" }] } }];
+  const sessionFile = writeSessionFile(join(home, "s9"), Date.now() / 1000 - 600, ["hello fix the bug"]);
+  const h = makeHarness({ sessionFile, branch, sessionName: "hello" });
+  autoRename(h.pi);
+  await h.fire("session_start", { reason: "reload" });           // reload：自愈跳过，始终无标题
+  eq("reload start sets no title", h.names.length, 0);
+  await h.fire("session_info_changed", { name: "my own title" }); // 首个自动标题之前的手工改名
+  await h.fire("agent_settled");
+  await h.fire("session_shutdown", { reason: "quit" });
+  await new Promise((r) => setTimeout(r, 50));
+  eq("pre-title manual rename freezes the session", h.names.length, 0);
+  check("pre-title manual rename pauses with manual_rename", () => {
+    const st = h.entries.filter((e) => e.customType === "auto-rename-state").at(-1)?.data ?? {};
+    if (st.paused !== true || st.pausedReason !== "manual_rename") throw new Error(`bad state ${JSON.stringify(st)}`);
+  });
+}
+{
+  resetStub();
+  const branch = [{ type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } }];
+  const sessionFile = writeSessionFile(join(home, "s8"), Date.now() / 1000 - 600, ["hello"]);
+  const h = makeHarness({ sessionFile, branch, sessionName: "hello" });
+  autoRename(h.pi);
+  await h.fire("session_start", { reason: "resume" });
+  await h.fire("session_info_changed", { name: "hello" });          // board 重放种子名
+  const paused = h.entries.some((e) => e.customType === "auto-rename-state" && e.data?.paused === true);
+  eq("seed name replay does not pause", paused, false);
+}
 summary();
