@@ -6,6 +6,7 @@ Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T08:15:00+08:00 — 第 1 轮复核修订：R1-G1 补 U1–U4 部署前置 + D9 状态自证标记；R1-D1 写点表述；R1-D2 补 final 失败分支验收（A11）；R1-D3 补 `SessionStartEvent.reason` 出处 + 防御式判据；R1-D4 补文档一致性验收（A13）；R1-D5 补 board→session 通道证据 + 外部命名冻结显式化
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T08:25:00+08:00 — 第 2 轮复核收敛后折叠 5 项细化：R2-D1 版本陈述改为实查口径（npm 副本已是 0.3.0）；R2-D2 部署前置加「关掉 board 自带 title-runner」+ U1 来源自证；R2-D3 声明 final 与在飞 run 撞车边界并补 A11 用例；R2-D4 三处引用行号校正；R2-D5 模型调用次数陈述改写
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T09:10:00+08:00 — 实现期发现：`capTitle` 按 issue #10 D7 转小写，与 A3 验收串 `Greeting exchange` 冲突 → 裁定验收矩阵优先，机械 core 绕过 `capTitle`；改动二散文与 D3 行同步，A3 增宽度不变量断言
+Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T09:41:00+08:00 — Task 9 实现期发现 brief 的三目判据与受强制用例 2 不可同时成立（Task 8 自愈把命名提前到 session_start 内）→ 裁定改为析取式 `name === lastSetTitle || name === initialNameSeen`（与 plan 注释原语义一致），并补「首轮之前窗口」用例；D6 行与边界段同步，记录已接受的盲点（用户把名字改回原种子名不会暂停）
 状态：**收敛**（第 2 轮复核无真缺口）→ ⏸ 等待用户确认设计 → 步 5 worktree
 仓库：zhuxixi/pi-auto-rename（main @ 3e88e34，v0.3.0；本机实际加载的 npm 副本以 `~/.pi/agent/npm/node_modules/@zhuxixi/pi-auto-rename/package.json` 实查为准——2026-10-12 第 2 轮复核时为 `0.3.0`，含 issue #7 代码、无 issue #9 修复）
 调研：`research/R1-根因复核与量化证据.md`、`research/R2-设计先例与约束.md`（结论已评论回 issue #9）
@@ -89,12 +90,12 @@ Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical
 | D3 | 纯问候会话 | 机械 core（zh「问候交流」/ 否则 `Greeting exchange`）+ 不调模型 + 跳过质量门 + **不写 `lastRunEpoch`（不占冷却）**；机械 core 为最终形态常量，绕过 `capTitle` | 走模型（0 信息量输入也花钱）；占冷却（hello→真问题 的升级要等 3 分钟，用户场景复现） |
 | D4 | 退出兜底 | `session_shutdown`（reason ≠ reload）且从未命名时补跑一次，跳门槛、5s `AbortSignal` 预算 | 移除（首 turn 中途被杀/模型故障的会话无解） |
 | D5 | 重开自愈 | `session_start`（reason ≠ reload、从未命名、有用户消息）触发一次命名 | 不处理（存量 46 个 view 永远 hello）；批量回填脚本（成本高、脱离会话上下文质量差） |
-| D6 | 手工改名保护 | 初始名判据（同上一版）：`session_start` 记 `pi.getSessionName()`，暂停条件扩为「≠ 我设的标题，且（无自动标题时）≠ 初始名」 | 现状（新时机会覆盖首跑期手工改名 = 引入回归）；任何名字变化都暂停（board 种子名会误暂停） |
+| D6 | 手工改名保护 | 初始名判据（同上一版）：`session_start` 记 `pi.getSessionName()`，暂停条件为「当前标题既 ≠ 我设过的标题、也 ≠ `session_start` 时读到的初始名」（析取判定：等于任一即视为我方命名或种子名，不暂停） | 现状（新时机会覆盖首跑期手工改名 = 引入回归）；任何名字变化都暂停（board 种子名会误暂停） |
 | D7 | 定时器 | **移除**（第一版的 D1/D7 作废）：三个结局（活到 settle、提前结束、被杀后重开）都被事件覆盖 | 保留（对已死进程无意义；对活着的会话 settle 比闹钟到得更早） |
 | D8 | 文档 | README「How It Works」与配置表按新语义改写；CHANGELOG 记 `feat`（行为变更，发 minor） | 不更新（README:100,119-120 与实现将不符） |
 | D9 | 部署自证标记（R1-G1） | `/autorename-status` 增印 `timing=first@settle,lock@<firstAfterMin>m`，行文本由纯函数 `formatStatusLine` 生成 | 不设标记（U1–U4 无法自证「新代码已加载」，实测可能全跑在 npm 旧副本上） |
 
-**D6 的边界（R1-D5 修订）**：`session_info_changed` 的外部命名源只有两类——用户 `/name`（或 pi 的改名入口）与其它命名扩展；**board 不写 session 名**（证据：`pi-agent-board` 仓库 `src/` + `runner/` 全量 grep `setSessionName|session_info|sessionInfo|appendSessionInfo` 零命中；board 的 title-runner 只写 `meta.name`，`runner/title-runner.mjs:40-41` 仅在 `meta.name === fallbackName` 时改写 meta）。因此「board 重复下发种子名」不会触发 `session_info_changed`；若将来出现外部命名源（含 board 侧改动），D6 判据会冻结该会话——**这是预期语义**：尊重外部命名，不与其争抢（与现状「手工改名即冻结」的意图一致）。
+**D6 的边界（R1-D5 修订）**：`session_info_changed` 的外部命名源只有两类——用户 `/name`（或 pi 的改名入口）与其它命名扩展；**board 不写 session 名**（证据：`pi-agent-board` 仓库 `src/` + `runner/` 全量 grep `setSessionName|session_info|sessionInfo|appendSessionInfo` 零命中；board 的 title-runner 只写 `meta.name`，`runner/title-runner.mjs:40-41` 仅在 `meta.name === fallbackName` 时改写 meta）。因此「board 重复下发种子名」不会触发 `session_info_changed`；若将来出现外部命名源（含 board 侧改动），D6 判据会冻结该会话——**这是预期语义**：尊重外部命名，不与其争抢（与现状「手工改名即冻结」的意图一致）。**已接受的盲点**：用户若把标题手工改回「原种子名」那一个字符串，判定会当作种子名重放而不暂停（与 board 重放不可区分）；概率极低，接受。
 
 ### `lib/auto-rename-core.ts`（纯函数，全部可测）
 

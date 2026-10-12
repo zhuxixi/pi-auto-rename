@@ -883,7 +883,10 @@ git commit -m "feat(extension): session_shutdown catch-all + session_start self-
     // issue #9 D6: a session that was never auto-named still protects the
     // user's own rename — anything other than our last title AND other than the
     // name seen at session_start (board seed / replayed seed) is a user rename.
-    const ours = st.lastSetTitle ? name === st.lastSetTitle : name === initialNameSeen;
+    // disjunction, not a ternary: the plan comment below already described this
+    // semantics, and Task 8's self-heal sets lastSetTitle inside session_start, so a
+    // ternary would pause on a replayed board seed (Task 9 supervisor ruling).
+    const ours = name === st.lastSetTitle || name === initialNameSeen;
     if (!ours) {
       pi.appendEntry(STATE_ENTRY_TYPE, { ...st, paused: true, pausedReason: "manual_rename" });
       debugLog(`manual rename detected (${name}); session paused`);
