@@ -519,6 +519,24 @@ export function shouldReDerive(st: { coreLocked?: boolean; evidenceKey?: string 
   return (st.evidenceKey ?? "") !== e.key;
 }
 
+/**
+ * Whether a rename run is due (issue #9 D1). force/final bypass every gate.
+ * The first run of a session is due as soon as content exists — the
+ * firstAfterMin wall-clock gate moved to the core lock (`coreLocksNow`), so a
+ * session that dies in two minutes still gets a title while it is alive.
+ */
+export function renameDue(input: {
+  st: { lastRunEpoch?: number };
+  nowSec: number;
+  repeatEveryMin: number;
+  force?: boolean;
+  final?: boolean;
+}): boolean {
+  if (input.force || input.final) return true;
+  if (!input.st.lastRunEpoch) return true;
+  return input.nowSec - input.st.lastRunEpoch >= input.repeatEveryMin * 60;
+}
+
 // ---- issue-driven work evidence (issue #7) -----------------------------------
 // The session's "issue under work" is recovered from tool calls and tool
 // results — the subject of an issue-driven session lives there, not in the
