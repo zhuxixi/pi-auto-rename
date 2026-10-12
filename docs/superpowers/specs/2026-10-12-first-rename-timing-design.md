@@ -7,6 +7,7 @@ Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T08:25:00+08:00 — 第 2 轮复核收敛后折叠 5 项细化：R2-D1 版本陈述改为实查口径（npm 副本已是 0.3.0）；R2-D2 部署前置加「关掉 board 自带 title-runner」+ U1 来源自证；R2-D3 声明 final 与在飞 run 撞车边界并补 A11 用例；R2-D4 三处引用行号校正；R2-D5 模型调用次数陈述改写
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T09:10:00+08:00 — 实现期发现：`capTitle` 按 issue #10 D7 转小写，与 A3 验收串 `Greeting exchange` 冲突 → 裁定验收矩阵优先，机械 core 绕过 `capTitle`；改动二散文与 D3 行同步，A3 增宽度不变量断言
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T09:41:00+08:00 — Task 9 实现期发现 brief 的三目判据与受强制用例 2 不可同时成立（Task 8 自愈把命名提前到 session_start 内）→ 裁定改为析取式 `name === lastSetTitle || name === initialNameSeen`（与 plan 注释原语义一致），并补「首轮之前窗口」用例；D6 行与边界段同步，记录已接受的盲点（用户把名字改回原种子名不会暂停）
+Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T10:17:00+08:00 — 终审后风险节补齐两条：退出预算依赖 provider 响应 abort（记录假设与不加竞速定时器的理由）；EARLY_WINDOW 全问候边界使机械标题可能永久驻留（记为 follow-up，修正「实质内容一来即升级」的表述）
 状态：**收敛**（第 2 轮复核无真缺口）→ ⏸ 等待用户确认设计 → 步 5 worktree
 仓库：zhuxixi/pi-auto-rename（main @ 3e88e34，v0.3.0；本机实际加载的 npm 副本以 `~/.pi/agent/npm/node_modules/@zhuxixi/pi-auto-rename/package.json` 实查为准——2026-10-12 第 2 轮复核时为 `0.3.0`，含 issue #7 代码、无 issue #9 修复）
 调研：`research/R1-根因复核与量化证据.md`、`research/R2-设计先例与约束.md`（结论已评论回 issue #9）
@@ -225,8 +226,9 @@ U1–U4 验证的是**正在运行的扩展**，而本机当前加载的是 npm 
 - **锁前标题措辞可能变一次**：既有「未锁即重推」语义的自然延伸；锁定后不再抖动。
 - **配置语义变更**：`firstAfterMin` 从命名门槛变为锁定门槛，README 必须同步；存量配置（`5`）无需迁移，长会话可观察行为与现状等价（D2 论证）。
 - **退出延迟**：final run 最多让退出多等 5s，仅发生在「从未命名过 + 有内容」的会话、每会话一次。
+- **退出预算依赖 provider 响应 abort**：final run 的 5s 预算靠 `llmOnce` 的 `AbortController` 生效；若某个 provider 实现忽略 signal，退出会被拖住（本分支未覆盖「挂起超预算」变体——测试 stub 恰好不响应 abort）。**不加竞速定时器的理由**：那需要引入定时器，与非目标 2 冲突，若要改需单独 spec 决策；当前按「pi-ai 的 `complete` 正常响应 abort」的既有假设记录在案。
 - **SIGKILL 残余边界**：被强杀且永不重开的会话仍停在种子名（明示，不假装覆盖）；重开即自愈。
-- **机械 core 误判**：沿用 `isTrivialMessage`（既有测试与负样本），且不锁核心、不占冷却 → 实质内容一来即升级。
+- **机械 core 误判**：沿用 `isTrivialMessage`（既有测试与负样本），且不锁核心、不占冷却 → 实质内容一来即升级。**边界（终审发现，记为 follow-up）**：`earlySelection` 只扫前 6 条用户消息（`EARLY_WINDOW`），若这 6 条**全部**为问候语（重复消息经去重后仍占窗口），`substantive` 恒为 false → 此后所有 settle 都走机械路径、标题永久停在问候 core，「实质内容一来即升级」在该边界不成立。非回归（基线更差），修法需改纯函数（越过窗口找最早实质消息）并补 unit 断言，另立 follow-up。
 - **部署路径失真（R1-G1）**：实测若未按「部署前置」先装 worktree 产物或未等 warm host 过期，U1–U4 会跑在 npm 旧副本上——前置的第 3、4、5 步就是为此设的卡点。
 - **外部命名源冻结**：若将来 board 侧或其他扩展开始写 session 名，D6 会把该会话冻结（预期语义，见「D6 的边界」）；board 当前不写 session 名（已 grep 证实），不构成现存风险。
 - **回滚**：单 commit revert；不新增 state 字段（无迁移）；部署侧回滚 = `pi remove <WT>` + 重装 npm 包。
