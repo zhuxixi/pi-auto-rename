@@ -5,7 +5,7 @@ import { check, summary } from "./support/assert";
 // run-all.sh bundles this file into a temp dir, where import.meta.dirname points at
 // the bundle; the harness always runs from the repo root, so try cwd first.
 function resolveReadme(): string {
-  for (const base of [process.cwd(), import.meta.dirname ?? "."]) {
+  for (const base of [process.cwd(), join(import.meta.dirname ?? ".", "..")]) {
     const p = join(base, "README.md");
     if (existsSync(p)) return p;
   }
