@@ -5,6 +5,7 @@ Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-10T08:43:00+08:00 — 用户反馈「只是缓解不是解决：2 分钟会话活着时拿不到标题」→ 首轮命名去墙钟化（`firstAfterMin` 从命名门槛改为锁定门槛），定时器方案整体移除，保留退出兜底与重开自愈
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T08:15:00+08:00 — 第 1 轮复核修订：R1-G1 补 U1–U4 部署前置 + D9 状态自证标记；R1-D1 写点表述；R1-D2 补 final 失败分支验收（A11）；R1-D3 补 `SessionStartEvent.reason` 出处 + 防御式判据；R1-D4 补文档一致性验收（A13）；R1-D5 补 board→session 通道证据 + 外部命名冻结显式化
 Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T08:25:00+08:00 — 第 2 轮复核收敛后折叠 5 项细化：R2-D1 版本陈述改为实查口径（npm 副本已是 0.3.0）；R2-D2 部署前置加「关掉 board 自带 title-runner」+ U1 来源自证；R2-D3 声明 final 与在飞 run 撞车边界并补 A11 用例；R2-D4 三处引用行号校正；R2-D5 模型调用次数陈述改写
+Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical) @ 2026-10-12T09:10:00+08:00 — 实现期发现：`capTitle` 按 issue #10 D7 转小写，与 A3 验收串 `Greeting exchange` 冲突 → 裁定验收矩阵优先，机械 core 绕过 `capTitle`；改动二散文与 D3 行同步，A3 增宽度不变量断言
 状态：**收敛**（第 2 轮复核无真缺口）→ ⏸ 等待用户确认设计 → 步 5 worktree
 仓库：zhuxixi/pi-auto-rename（main @ 3e88e34，v0.3.0；本机实际加载的 npm 副本以 `~/.pi/agent/npm/node_modules/@zhuxixi/pi-auto-rename/package.json` 实查为准——2026-10-12 第 2 轮复核时为 `0.3.0`，含 issue #7 代码、无 issue #9 修复）
 调研：`research/R1-根因复核与量化证据.md`、`research/R2-设计先例与约束.md`（结论已评论回 issue #9）
@@ -27,7 +28,7 @@ Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical
 
 ### 改动二：纯问候会话用本地备用标题，且不占用冷却
 
-「整段开场只有问候语」的会话（本机 45 个里占 23 个）不叫模型：本地直接给固定 core（`lang === "zh"` → 「问候交流」，否则 `Greeting exchange`），跳过质量门（门是给模型输出兜底的，本地构造字符串不需要过），不锁核心。
+「整段开场只有问候语」的会话（本机 45 个里占 23 个）不叫模型：本地直接给固定 core（`lang === "zh"` → 「问候交流」，否则 `Greeting exchange`），跳过质量门（门是给模型输出兜底的，本地构造字符串不需要过），不锁核心。机械 core 是**最终形态常量**，不再经 `capTitle`——`capTitle` 会按 issue #10 D7 把英文转小写，与 A3 的验收串 `Greeting exchange` 冲突，此处裁定验收矩阵优先；宽度由常量自身保证，并由 A3 的 `truncateDisplay` 断言机器校验（防止将来改常量时静默超宽）。
 
 关键细节：**机械标题不写入 `lastRunEpoch`**，也就是不启动 `repeatEveryMin` 的 3 分钟冷却。否则「先 `hello` 后说正事」的会话会在正事那轮撞上冷却，标题要等 3 分钟才升级——用户的 2 分钟场景又回来了。写法：机械路径算出标题后，若与现状相同则直接返回（零写入）；若不同则写标题 + 同步 board + 记 state（不含 `lastRunEpoch`）。这样下一个带实质内容的 settle 会被当作「首轮」立即命名。
 
@@ -85,7 +86,7 @@ Revised: deepseek/deepseek-flash (selected) · deepseek/deepseek-flash (physical
 |---|------|------|------------------|
 | D1 | 首轮命名时机 | **去墙钟化**：第一个有用户消息的 `agent_settled` 即命名 | 保留 5 分钟门槛 + 定时器（标题在门槛前依旧不存在——用户明确反馈这是缓解不是解决）；`turn_end`/`message_end`（turn 中途命名，抖动大且无必要） |
 | D2 | `firstAfterMin` 语义 | 从「命名门槛」改为「核心锁定门槛」：`nextLocked` 增 `age ≥ firstAfterMin` 条件 | 首轮即锁（开场意图未定型就锁死，质量回退）；直接删除该配置（破坏既有「观察期」语义，且长会话行为会发生变化） |
-| D3 | 纯问候会话 | 机械 core（zh「问候交流」/ 否则 `Greeting exchange`）+ 不调模型 + 跳过质量门 + **不写 `lastRunEpoch`（不占冷却）** | 走模型（0 信息量输入也花钱）；占冷却（hello→真问题 的升级要等 3 分钟，用户场景复现） |
+| D3 | 纯问候会话 | 机械 core（zh「问候交流」/ 否则 `Greeting exchange`）+ 不调模型 + 跳过质量门 + **不写 `lastRunEpoch`（不占冷却）**；机械 core 为最终形态常量，绕过 `capTitle` | 走模型（0 信息量输入也花钱）；占冷却（hello→真问题 的升级要等 3 分钟，用户场景复现） |
 | D4 | 退出兜底 | `session_shutdown`（reason ≠ reload）且从未命名时补跑一次，跳门槛、5s `AbortSignal` 预算 | 移除（首 turn 中途被杀/模型故障的会话无解） |
 | D5 | 重开自愈 | `session_start`（reason ≠ reload、从未命名、有用户消息）触发一次命名 | 不处理（存量 46 个 view 永远 hello）；批量回填脚本（成本高、脱离会话上下文质量差） |
 | D6 | 手工改名保护 | 初始名判据（同上一版）：`session_start` 记 `pi.getSessionName()`，暂停条件扩为「≠ 我设的标题，且（无自动标题时）≠ 初始名」 | 现状（新时机会覆盖首跑期手工改名 = 引入回归）；任何名字变化都暂停（board 种子名会误暂停） |
@@ -193,7 +194,7 @@ U1–U4 验证的是**正在运行的扩展**，而本机当前加载的是 npm 
 |----|--------|----------|----------|----------|
 | A1 | 首轮 due 去墙钟化 | 自动化验证（unit） | `bash test/run-all.sh`（新增 `test/first-rename-timing.test.ts`） | 无 `lastRunEpoch` → 恒 true（与年龄无关）；有 → `repeatEveryMin` 冷却分支不变；`force`/`final` 恒 true |
 | A2 | 锁定门槛 | 自动化验证（unit） | 同上 | `substantive && age ≥ firstAfterMin` → true；`substantive && age < firstAfterMin` → false；`force`/`rederive`/`alreadyLocked` → true；非实质 → false |
-| A3 | 机械问候 core | 自动化验证（unit） | 同上 | `zh` → 「问候交流」；`auto`/`en` → `Greeting exchange`；非空、≤ `maxCoreWidth` 显示列 |
+| A3 | 机械问候 core | 自动化验证（unit） | 同上 | `zh` → 「问候交流」；`auto`/`en` → `Greeting exchange`（常量最终形态，绕过 `capTitle`）；两条 `truncateDisplay(trivialCore(lang), MAX_CORE_WIDTH) === trivialCore(lang)` 断言宽度不变量 |
 | A4 | 机械路径不占冷却 | 自动化验证（unit + integration） | 同上 + `test/first-rename-timing.test.ts` | 机械改名后 state 无 `lastRunEpoch`；标题未变时零写入；随后的实质 settle 立即命名（不等冷却） |
 | A5 | 首个 settle 即命名 | 自动化验证（integration） | 同上（fake pi + alias stub） | 新会话 fire `agent_settled` 后**立即**调用 `setSessionName`（不等 5 分钟）；琐碎锚点场景 stub `complete` 调用数 = 0 |
 | A6 | 锁定时序 | 自动化验证（integration） | 同上 | `age < firstAfterMin` 的实质改名 → state `coreLocked=false`；`age ≥ firstAfterMin` → true |
