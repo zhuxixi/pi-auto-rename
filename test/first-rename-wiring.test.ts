@@ -118,6 +118,7 @@ check("state written without lastRunEpoch (A4)", () => {
   let threw = false;
   try { await h.fire("session_shutdown", { reason: "quit" }); } catch { threw = true; }
   eq("in-flight collision does not throw", threw, false);
+  eq("in-flight collision runs no second llm call", stubState.calls, 1);
   eq("in-flight collision writes no title", h.names.length, 0);
   check("in-flight collision writes no state", () => {
     if (h.entries.some((e) => e.customType === "auto-rename-state")) throw new Error("state written on collision");
@@ -174,3 +175,5 @@ check("state written without lastRunEpoch (A4)", () => {
   eq("seed name replay does not pause", paused, false);
 }
 summary();
+// The in-flight-collision case leaves a ref'd watchdog timer behind; summary() already exits 1 on failure, so this line is only reached on success.
+process.exit(0);
