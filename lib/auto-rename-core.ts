@@ -623,11 +623,6 @@ const RE_BRANCH_SLUG = /(?<![\w-])issue-(\d+)-([a-z0-9][a-z0-9-]{2,})/gi;
 // the github-issue-driven research/spec directory layout claims its issue
 const RE_DRIVEN_PATH = /github-issue-driven\/[^\s"'/]+\/[^\s"'/]+\/issue-(\d+)\//g;
 
-interface IssueSignals {
-  mutate: boolean; view: boolean; branch: boolean; path: boolean;
-  slug: string; title: string;
-}
-
 function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
   const map = new Map<number, IssueSignals>();
   const sig = (n: number): IssueSignals => {
@@ -698,20 +693,46 @@ function captureIssueTitles(text: string, sig: (n: number) => IssueSignals): voi
 
 const W_MUTATE = 6, W_BRANCH = 3, W_PATH = 3, W_VIEW = 1;
 
-/** The single issue this session is WORKING on, or null. Requires a claim
- *  signal (mutate/branch/path — binary) and a 2x lead over the runner-up;
- *  view-only and ambiguous sessions deliberately yield no evidence. */
+/** Per-issue signal detail (exported so pickDominant has a testable contract). */
+export interface IssueSignals {
+  mutate: boolean; view: boolean; branch: boolean; path: boolean;
+  slug: string; title: string;
+}
+
+/** One scored issue: `w` is the weighted total (mutate6 | branch3 | path3 | view1). */
+export interface RankedIssue { n: number; s: IssueSignals; w: number }
+
+/** Pick the dominant issue out of a ranked list (highest `w` first).
+ *  Decision order:
+ *   1. empty list -> null;
+ *   2. top has no claim signal (mutate/branch/path) -> null;
+ *   3. a unique mutate holder that IS the top wins outright: exactly one issue
+ *      received a write operation, so there is no ambiguity for the 2x ratio
+ *      (built for "viewing many, working on none") to guard against (issue #11);
+ *   4. otherwise the old gate: the top must reach 2x the runner-up. */
+export function pickDominant(ranked: RankedIssue[]): number | null {
+  const top = ranked[0];
+  if (!top || !(top.s.mutate || top.s.branch || top.s.path)) return null;  // no claim at all
+  const mutates = ranked.filter((r) => r.s.mutate);
+  if (mutates.length === 1 && mutates[0].n === top.n) return top.n;        // unique write claim
+  const second = ranked[1];
+  if (second && top.w < 2 * second.w) return null;                         // ambiguous
+  return top.n;
+}
+
+/** The single issue this session is WORKING on, or null (decision order in
+ *  pickDominant). Ties break on the lower issue number, so the outcome never
+ *  depends on JS engine sort stability. */
 export function extractWorkEvidence(branch: any[]): WorkEvidence | null {
   const map = scanIssueSignals(branch);
-  const ranked = [...map.entries()]
+  const ranked: RankedIssue[] = [...map.entries()]
     .map(([n, s]) => ({
       n, s,
       w: (s.mutate ? W_MUTATE : 0) + (s.branch ? W_BRANCH : 0) + (s.path ? W_PATH : 0) + (s.view ? W_VIEW : 0),
     }))
-    .sort((a, b) => b.w - a.w);
-  const top = ranked[0];
-  if (!top || !(top.s.mutate || top.s.branch || top.s.path)) return null; // no claim at all
-  const second = ranked[1];
-  if (second && top.w < 2 * second.w) return null;                        // ambiguous
-  return { issueNumber: top.n, title: top.s.title, slug: top.s.slug, key: `issue:${top.n}` };
+    .sort((a, b) => b.w - a.w || a.n - b.n);
+  const n = pickDominant(ranked);
+  if (n === null) return null;
+  const s = map.get(n) as IssueSignals;
+  return { issueNumber: n, title: s.title, slug: s.slug, key: `issue:${n}` };
 }

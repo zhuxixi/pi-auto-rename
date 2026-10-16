@@ -81,6 +81,46 @@ const evAmbiguous = extractWorkEvidence([
 ]);
 eq("ambiguous claims -> null", evAmbiguous, null);
 
+// ---- issue #11: unique-mutate short circuit + explicit tie-break ------------
+
+// The view_eff2b7b9ba shape, 13 vs 7: 188 = mutate+view+path+branch,
+// 185 = view+path+branch. Without the short circuit 13 < 2*7 -> null.
+const evUniqueMutate = extractWorkEvidence([
+  toolCall("gh issue comment 188 --body 'start'"),
+  toolCall("gh issue view 188"),
+  toolCall("ls ~/.claude/github-issue-driven/zhuxixi/pi-agent-board/issue-188/"),
+  toolCall("git worktree add .pi/worktrees/issue-188-x10-release -b issue-188-x10-release"),
+  toolCall("gh issue view 185"),
+  toolCall("ls ~/.claude/github-issue-driven/zhuxixi/pi-agent-board/issue-185/"),
+  toolCall("git worktree add .pi/worktrees/issue-185-wheel -b issue-185-wheel"),
+]);
+eq("unique mutate claim short-circuits the 2x gate (13 vs 7)", evUniqueMutate?.issueNumber, 188);
+
+// Not a general threshold relaxation: when the unique mutate holder is NOT
+// the top scorer (100 = view+path+branch = 7, 200 = mutate only = 6), the old
+// 2x gate still applies -> ambiguous -> null.
+const evMutateNotTop = extractWorkEvidence([
+  toolCall("gh issue view 100"),
+  toolCall("ls ~/.claude/github-issue-driven/zhuxixi/jfox/issue-100/"),
+  toolCall("git worktree add .pi/worktrees/issue-100-fix -b issue-100-fix"),
+  toolCall("gh issue comment 200 --body x"),
+]);
+eq("unique mutate below the top scorer stays ambiguous", evMutateNotTop, null);
+
+// Tie-break with insertion order REVERSED against the issue-number order:
+// 300 first (view+path+branch = 7), 200 last (mutate+view = 7). A stable sort
+// without the explicit tie-break keeps 300 on top (then 7 < 2*7 -> null);
+// with the tie-break the lower number (200, also the unique mutate holder)
+// wins and the short circuit returns it.
+const evTieBreak = extractWorkEvidence([
+  toolCall("gh issue view 300"),
+  toolCall("ls ~/.claude/github-issue-driven/zhuxixi/jfox/issue-300/"),
+  toolCall("git worktree add .pi/worktrees/issue-300-fix -b issue-300-fix"),
+  toolCall("gh issue comment 200 --body x"),
+  toolCall("gh issue view 200"),
+]);
+eq("tie-break keeps the lower issue number on top", evTieBreak?.issueNumber, 200);
+
 // binary counting: the same worktree path 50x must NOT out-claim a real claim
 const manyPathCalls = Array.from({ length: 50 }, () =>
   toolCall(`git -C .pi/worktrees/issue-999-heavy-mentioned status`));
