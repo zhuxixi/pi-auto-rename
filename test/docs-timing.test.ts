@@ -24,4 +24,10 @@ check("no stale 'first rename after' wording", () => {
 check("how-it-works mentions the first settle", () => {
   if (!/first settle|first `agent_settled`|first agent_settled/i.test(readme)) throw new Error("How It Works must describe settle-driven first rename");
 });
+check("evidence section documents the unique-mutate short-circuit", () => {
+  if (!/unique mutate|唯一 mutate/i.test(readme)) throw new Error("evidence section must document the short-circuit");
+});
+check("no stale plain-2x wording in the evidence section", () => {
+  if (readme.includes("2x dominance margin")) throw new Error("stale '2x dominance margin' wording present");
+});
 summary();

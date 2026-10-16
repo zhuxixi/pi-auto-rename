@@ -140,7 +140,9 @@ Edit the file and run `/reload` to apply.
 **Issue evidence (issue #7)**: the extension also scans tool calls and
 their results for a GitHub issue "under work" — `gh issue view` output
 parsed for title/number pairs, plus claim/branch/research-path signals
-scored per issue with a 2x dominance margin. When evidence wins, it is
+scored per issue. A unique mutate claim on the top-scoring issue wins
+outright (one write operation rules out ambiguity); otherwise the top must
+lead the runner-up by 2x. When evidence wins, it is
 injected into the title prompt as a high-weight block that requires the
 core to condense the issue's subject, and a new evidence key overrides
 the core lock for exactly one re-derive — so existing stage-label titles
