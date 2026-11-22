@@ -1,6 +1,6 @@
 // issue #7 — work-evidence extraction from tool calls / tool results,
 // plus its high-weight injection into the title prompt (evidencePromptBlock).
-import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock, slugToCore, shouldReDerive } from "../lib/auto-rename-core";
+import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock, slugToCore, shouldReDerive, stripHeredocBodies, splitCommandSegments, ghIssueAction } from "../lib/auto-rename-core";
 import type { WorkEvidence } from "../lib/auto-rename-core";
 
 // zero-dep helpers, inlined (no test framework — same pattern as test/auto-rename-core.test.ts)
@@ -133,6 +133,32 @@ eq("binary counting keeps dominance sane", evBinary?.issueNumber, 888);
 // empty branch / no tool activity -> null
 eq("no messages -> null", extractWorkEvidence([]), null);
 eq("user-only branch -> null", extractWorkEvidence([userMsg("hello"), userMsg("看一下 issue 460")]), null);
+
+// ---- issue #13 A2: quote-aware bash command evidence helpers -----------------
+
+// Real gh commands, including env assignment and the command wrapper.
+eq("gh comment is a mutate", ghIssueAction("gh issue comment 13 --body x")?.kind, "mutate");
+eq("gh view captures number", ghIssueAction("FOO=bar command gh issue view 460 --json title")?.issueNumber, 460);
+eq("gh edit is a mutate", ghIssueAction("gh issue edit 7 --add-assignee @me")?.issueNumber, 7);
+
+// Search text, quoted text, partial issue numbers and unsupported wrappers fail closed.
+eq("rg pattern is not gh", ghIssueAction("rg 'gh issue comment 188' session.jsonl"), null);
+eq("quoted gh is not a command", ghIssueAction("'gh issue comment 188'"), null);
+eq("unsupported wrapper is not guessed", ghIssueAction("sudo gh issue close 13"), null);
+eq("issue number must be a complete token", ghIssueAction("gh issue view 13x"), null);
+
+// Separators inside quotes stay inside their segment.
+const segments = splitCommandSegments("printf '&& ; |' && gh issue view 13\ngh issue close 14");
+eq("quote-aware segment count", segments.length, 3);
+eq("first segment retains quoted separators", segments[0], "printf '&& ; |'");
+eq("second segment is the real view", ghIssueAction(segments[1])?.issueNumber, 13);
+eq("third segment is the real close", ghIssueAction(segments[2])?.kind, "mutate");
+
+const heredoc = "gh issue create --body-file - <<'EOF'\ngh issue comment 188\nissue-188-x10-release\nEOF\ngh issue view 13";
+const stripped = stripHeredocBodies(heredoc);
+check("heredoc body removed", !stripped.includes("comment 188") && !stripped.includes("x10-release"));
+check("command after heredoc retained", stripped.includes("gh issue view 13"));
+check("dash heredoc removed", !stripHeredocBodies("cat <<-EOF\ngh issue close 9\nEOF").includes("close 9"));
 
 // ---- evidencePromptBlock + buildUserPrompt evidence param (issue #7 task 2) ---
 const EV: WorkEvidence = { issueNumber: 460, title: "bug(test): pytest 写穿真实配置", slug: "test-config-isolation", key: "issue:460" };

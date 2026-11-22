@@ -623,6 +623,57 @@ const RE_BRANCH_SLUG = /(?<![\w-])issue-(\d+)-([a-z0-9][a-z0-9-]{2,})/gi;
 // the github-issue-driven research/spec directory layout claims its issue
 const RE_DRIVEN_PATH = /github-issue-driven\/[^\s"'/]+\/[^\s"'/]+\/issue-(\d+)\//g;
 
+// Quote-aware parsing of executed bash commands (issue #13): a `gh issue`
+// phrase only counts as evidence when it is an executed command segment — not
+// text inside quotes, heredoc bodies, or search patterns.
+export function stripHeredocBodies(command: string): string {
+  return command.replace(
+    /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?\n[ \t]*\2\b/g,
+    "<<HEREDOC-STRIPPED>>",
+  );
+}
+
+export function splitCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const push = (end: number) => {
+    const segment = command.slice(start, end).trim();
+    if (segment) segments.push(segment);
+  };
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === "\n" || ch === ";" || ch === "|" || ch === "&") {
+      push(i);
+      if ((ch === "|" || ch === "&") && command[i + 1] === ch) i += 1;
+      start = i + 1;
+    }
+  }
+  push(command.length);
+  return segments;
+}
+
+export function ghIssueAction(
+  segment: string,
+): { kind: "mutate" | "view"; issueNumber: number } | null {
+  const match = segment.trimStart().match(
+    /^(?:(?:[A-Za-z_][A-Za-z0-9_]*)=(?:"[^"]*"|'[^']*'|\S+)\s+)*(?:command\s+)?gh\s+issue\s+(edit|close|reopen|comment|view)\s+(\d+)(?:\s|$)/,
+  );
+  if (!match) return null;
+  return {
+    kind: match[1] === "view" ? "view" : "mutate",
+    issueNumber: Number(match[2]),
+  };
+}
+
 function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
   const map = new Map<number, IssueSignals>();
   const sig = (n: number): IssueSignals => {
