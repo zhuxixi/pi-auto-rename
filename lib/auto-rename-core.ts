@@ -614,10 +614,6 @@ export interface WorkEvidence {
   key: string;     // "issue:460" — state comparison key
 }
 
-// explicit issue mutations: the strongest claim ("working on", not "looking at")
-const RE_ISSUE_MUTATE = /gh\s+issue\s+(?:edit|close|reopen|comment)\s+(\d+)/g;
-// gh issue view N is weak: triage sessions view dozens of issues
-const RE_ISSUE_VIEW = /gh\s+issue\s+view\s+(\d+)/g;
 // branch / worktree slugs (issue-460-test-config-isolation) claim + carry a subject slug
 const RE_BRANCH_SLUG = /(?<![\w-])issue-(\d+)-([a-z0-9][a-z0-9-]{2,})/gi;
 // the github-issue-driven research/spec directory layout claims its issue
@@ -691,17 +687,39 @@ function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
       if (!s.slug) s.slug = mm[2].toLowerCase();
     }
   };
+  const claimPath = (text: string) => {
+    for (const mm of text.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
+  };
   for (const entry of branch) {
     if (entry?.type !== "message" || !entry.message) continue;
     const m = entry.message;
     if (m.role === "assistant" && Array.isArray(m.content)) {
       for (const b of m.content) {
         if (b?.type !== "toolCall") continue;
-        const args = JSON.stringify(b.arguments ?? {});
-        for (const mm of args.matchAll(RE_ISSUE_MUTATE)) sig(Number(mm[1])).mutate = true;
-        for (const mm of args.matchAll(RE_ISSUE_VIEW)) sig(Number(mm[1])).view = true;
-        for (const mm of args.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
-        claimSlug(args);
+        const name = String(b.name ?? "");
+        const args = (b.arguments ?? {}) as Record<string, unknown>;
+        if (name === "bash") {
+          const command = stripHeredocBodies(String(args.command ?? ""));
+          for (const segment of splitCommandSegments(command)) {
+            const action = ghIssueAction(segment);
+            if (!action) continue;
+            const s = sig(action.issueNumber);
+            if (action.kind === "mutate") s.mutate = true;
+            else s.view = true;
+          }
+          claimSlug(command);
+          claimPath(command);
+          continue;
+        }
+
+        let target = "";
+        if (name === "write" || name === "edit") target = String(args.path ?? "");
+        else if (name === "git_worktree") target = JSON.stringify({ path: args.path, branch: args.branch });
+        else if (name === "subagent") target = String(args.cwd ?? "");
+        if (target) {
+          claimSlug(target);
+          claimPath(target);
+        }
       }
     }
     if (m.role === "toolResult") {

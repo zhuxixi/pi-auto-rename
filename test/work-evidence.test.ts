@@ -19,6 +19,10 @@ const toolCall = (command: string) => ({
   type: "message",
   message: { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command } }] },
 });
+const namedToolCall = (name: string, args: Record<string, unknown>) => ({
+  type: "message",
+  message: { role: "assistant", content: [{ type: "toolCall", name, arguments: args }] },
+});
 const toolResult = (text: string) => ({
   type: "message",
   message: { role: "toolResult", content: [{ type: "text", text }] },
@@ -159,6 +163,48 @@ const stripped = stripHeredocBodies(heredoc);
 check("heredoc body removed", !stripped.includes("comment 188") && !stripped.includes("x10-release"));
 check("command after heredoc retained", stripped.includes("gh issue view 13"));
 check("dash heredoc removed", !stripHeredocBodies("cat <<-EOF\ngh issue close 9\nEOF").includes("close 9"));
+
+// ---- issue #13 A1: execution evidence selected by tool field -----------------
+
+const pollutedWrite = namedToolCall("write", {
+  path: "/tmp/evidence-fixture.md",
+  content: "gh issue comment 188\nissue-188-x10-release\ngithub-issue-driven/z/p/issue-188/research/",
+});
+eq("write body alone creates no evidence", extractWorkEvidence([pollutedWrite]), null);
+
+const writeTarget = namedToolCall("write", {
+  path: "/home/me/.github-issue-driven/zhuxixi/pi-auto-rename/issue-13/research/note.md",
+  content: "gh issue comment 188 and issue-188-x10-release are only examples",
+});
+eq("write target path claims its own issue", extractWorkEvidence([writeTarget])?.issueNumber, 13);
+
+const editTarget = namedToolCall("edit", {
+  path: "/home/me/.github-issue-driven/zhuxixi/pi-auto-rename/issue-14/research/note.md",
+  edits: [{ oldText: "issue-188-x10-release", newText: "issue-999-other-work" }],
+});
+eq("edit target counts but edit bodies do not", extractWorkEvidence([editTarget])?.issueNumber, 14);
+
+const gitWorktree = namedToolCall("git_worktree", {
+  action: "add",
+  path: "/repo/.pi/worktrees/issue-15-real-work",
+  branch: "issue-15-real-work",
+});
+eq("git_worktree structured fields claim issue", extractWorkEvidence([gitWorktree])?.issueNumber, 15);
+
+const child = namedToolCall("subagent", {
+  agent: "implementer",
+  cwd: "/repo/.pi/worktrees/issue-16-real-work",
+  task: "Discuss gh issue comment 188 and issue-188-x10-release",
+});
+eq("subagent cwd counts but task does not", extractWorkEvidence([child])?.issueNumber, 16);
+
+const readOnly = namedToolCall("read", {
+  path: "/repo/.pi/worktrees/issue-17-not-a-claim/file.ts",
+});
+eq("read path is not execution evidence", extractWorkEvidence([readOnly]), null);
+
+const searched = toolCall("rg 'gh issue comment 188' /tmp/session.jsonl");
+eq("bash rg pattern does not mutate", extractWorkEvidence([searched]), null);
 
 // ---- evidencePromptBlock + buildUserPrompt evidence param (issue #7 task 2) ---
 const EV: WorkEvidence = { issueNumber: 460, title: "bug(test): pytest 写穿真实配置", slug: "test-config-isolation", key: "issue:460" };
