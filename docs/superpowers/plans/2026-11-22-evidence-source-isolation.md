@@ -86,7 +86,7 @@ Expected: `work-evidence.test.ts` fails to bundle because the three exports do n
 
 - [ ] **Step 3: Implement the three pure helpers**
 
-Remove the old broad `RE_ISSUE_MUTATE` and `RE_ISSUE_VIEW` declarations. Add:
+Keep the old broad `RE_ISSUE_MUTATE` and `RE_ISSUE_VIEW` declarations and their existing `scanIssueSignals` usages unchanged in this task so the current tests stay green; Task 2 removes them together with rewiring. Add:
 
 ```ts
 export function stripHeredocBodies(command: string): string {
@@ -228,7 +228,7 @@ Expected: write/read/rg cases fail because the old full-arguments scan sees thei
 
 - [ ] **Step 3: Replace full-argument scanning with explicit field mapping**
 
-Inside `scanIssueSignals`, keep `sig` and `claimSlug`, add a `claimPath` helper, and replace the assistant toolCall loop with:
+Inside `scanIssueSignals`, keep `sig` and `claimSlug`, add a `claimPath` helper, delete the now-unused `RE_ISSUE_MUTATE` and `RE_ISSUE_VIEW` declarations, and replace the assistant toolCall loop with:
 
 ```ts
 const claimPath = (text: string) => {
