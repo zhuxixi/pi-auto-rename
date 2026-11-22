@@ -605,7 +605,9 @@ export function formatStatusLine(
 // user prompts ("看一下 issue 460" names no subject). Zero network: the issue
 // title is parsed from `gh issue view` output already present in the
 // transcript. Signals are counted BINARY per issue (a worktree path appears
-// in dozens of later commands; occurrence counts would inflate it).
+// in dozens of later commands; occurrence counts would inflate it). Tool-result
+// text yields weight-1 OBSERVED branch/path signals — output that merely
+// mentions an issue never outweighs acting on another (issue #13).
 
 export interface WorkEvidence {
   issueNumber: number;
@@ -675,20 +677,25 @@ function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
   const sig = (n: number): IssueSignals => {
     let s = map.get(n);
     if (!s) {
-      s = { mutate: false, view: false, branch: false, path: false, slug: "", title: "" };
+      s = { mutate: false, view: false, branch: false, path: false, observedBranch: false, observedPath: false, slug: "", title: "" };
       map.set(n, s);
     }
     return s;
   };
-  const claimSlug = (text: string) => {
+  const claimSlug = (text: string, observed = false) => {
     for (const mm of text.matchAll(RE_BRANCH_SLUG)) {
       const s = sig(Number(mm[1]));
-      s.branch = true;
+      if (observed) s.observedBranch = true;
+      else s.branch = true;
       if (!s.slug) s.slug = mm[2].toLowerCase();
     }
   };
-  const claimPath = (text: string) => {
-    for (const mm of text.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
+  const claimPath = (text: string, observed = false) => {
+    for (const mm of text.matchAll(RE_DRIVEN_PATH)) {
+      const s = sig(Number(mm[1]));
+      if (observed) s.observedPath = true;
+      else s.path = true;
+    }
   };
   for (const entry of branch) {
     if (entry?.type !== "message" || !entry.message) continue;
@@ -725,8 +732,8 @@ function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
     if (m.role === "toolResult") {
       const text = blockText(m.content);
       if (!text) continue;
-      for (const mm of text.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
-      claimSlug(text);
+      claimSlug(text, true);   // observed claims (weight 1): result text reports, it does not act
+      claimPath(text, true);
       captureIssueTitles(text, sig);
     }
   }
@@ -760,28 +767,40 @@ function captureIssueTitles(text: string, sig: (n: number) => IssueSignals): voi
   }
 }
 
-const W_MUTATE = 6, W_BRANCH = 3, W_PATH = 3, W_VIEW = 1;
+const W_MUTATE = 6, W_BRANCH = 3, W_PATH = 3, W_VIEW = 1, W_OBSERVED = 1;
 
-/** Per-issue signal detail (exported so pickDominant has a testable contract). */
+/** Per-issue signal detail (exported so pickDominant has a testable contract).
+ *  `branch`/`path` are EXECUTION claims from tool-call fields;
+ *  `observedBranch`/`observedPath` are weight-1 observations from toolResult
+ *  text (issue #13) — output reports mentions, it does not act on them. */
 export interface IssueSignals {
-  mutate: boolean; view: boolean; branch: boolean; path: boolean;
-  slug: string; title: string;
+  mutate: boolean;
+  view: boolean;
+  branch: boolean;
+  path: boolean;
+  observedBranch?: boolean;
+  observedPath?: boolean;
+  slug: string;
+  title: string;
 }
 
-/** One scored issue: `w` is the weighted total (mutate6 | branch3 | path3 | view1). */
+/** One scored issue: `w` is the weighted total
+ *  (mutate6 | execution branch/path3 | observed branch/path1 | view1), taking
+ *  the HIGHEST source weight per kind, so execution+observation of the same
+ *  branch scores 3, never 4. */
 export interface RankedIssue { n: number; s: IssueSignals; w: number }
 
 /** Pick the dominant issue out of a ranked list (highest `w` first).
  *  Decision order:
  *   1. empty list -> null;
- *   2. top has no claim signal (mutate/branch/path) -> null;
+ *   2. top has no claim signal (mutate/branch/path/observed) -> null;
  *   3. a unique mutate holder that IS the top wins outright: exactly one issue
  *      received a write operation, so there is no ambiguity for the 2x ratio
  *      (built for "viewing many, working on none") to guard against (issue #11);
  *   4. otherwise the old gate: the top must reach 2x the runner-up. */
 export function pickDominant(ranked: RankedIssue[]): number | null {
   const top = ranked[0];
-  if (!top || !(top.s.mutate || top.s.branch || top.s.path)) return null;  // no claim at all
+  if (!top || !(top.s.mutate || top.s.branch || top.s.path || top.s.observedBranch || top.s.observedPath)) return null;  // no claim at all
   const mutates = ranked.filter((r) => r.s.mutate);
   if (mutates.length === 1 && mutates[0].n === top.n) return top.n;        // unique write claim
   const second = ranked[1];
@@ -797,7 +816,10 @@ export function extractWorkEvidence(branch: any[]): WorkEvidence | null {
   const ranked: RankedIssue[] = [...map.entries()]
     .map(([n, s]) => ({
       n, s,
-      w: (s.mutate ? W_MUTATE : 0) + (s.branch ? W_BRANCH : 0) + (s.path ? W_PATH : 0) + (s.view ? W_VIEW : 0),
+      w: (s.mutate ? W_MUTATE : 0) +
+        (s.branch ? W_BRANCH : s.observedBranch ? W_OBSERVED : 0) +
+        (s.path ? W_PATH : s.observedPath ? W_OBSERVED : 0) +
+        (s.view ? W_VIEW : 0),
     }))
     .sort((a, b) => b.w - a.w || a.n - b.n);
   const n = pickDominant(ranked);
