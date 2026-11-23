@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-11-23
+
+### Fixed
+- issue 证据抽取把「读到的文本」当作工作证据：toolCall 只认实际执行字段（bash 命令剥 heredoc 后按命令段识别段首 `gh`；write/edit 只扫目标路径；subagent 只扫 cwd），搜索模式/引号文本/文档正文不再产生伪 claim；toolResult 的 branch/path 降为观察信号（各 1 分，同类与执行取最高分），目录枚举与历史回显不再抬高 runner-up（issue #13）
+
 ## [0.4.1] - 2026-10-16
 
 ### Fixed
