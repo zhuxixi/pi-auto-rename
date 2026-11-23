@@ -30,4 +30,13 @@ check("evidence section documents the unique-mutate short-circuit", () => {
 check("no stale plain-2x wording in the evidence section", () => {
   if (readme.includes("2x dominance margin")) throw new Error("stale '2x dominance margin' wording present");
 });
+check("evidence section separates execution from observation", () => {
+  if (!/observed|observation|toolResult/i.test(readme)) throw new Error("evidence section must document toolResult observations");
+  if (!/write\/edit|write and edit/i.test(readme)) throw new Error("evidence section must document write/edit path-only scanning");
+  if (!/never their document bodies|target paths/i.test(readme)) throw new Error("write/edit scanning must stay path-only");
+});
+check("evidence section documents observation weights and max-source rule", () => {
+  if (!/observ[^\n]*\b1\b/i.test(readme)) throw new Error("observed branch/path weight must be 1");
+  if (!/only the higher weight|higher weight is\s+counted|取最高/i.test(readme)) throw new Error("same-kind signals must use the higher source weight");
+});
 summary();

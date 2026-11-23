@@ -137,17 +137,19 @@ Edit the file and run `/reload` to apply.
    `paused`) lives in the session file as `auto-rename-state` custom
    entries, so it survives reloads.
 
-**Issue evidence (issue #7)**: the extension also scans tool calls and
-their results for a GitHub issue "under work" — `gh issue view` output
-parsed for title/number pairs, plus claim/branch/research-path signals
-scored per issue. A unique mutate claim on the top-scoring issue wins
-outright (one write operation rules out ambiguity); otherwise the top must
-lead the runner-up by 2x. When evidence wins, it is
-injected into the title prompt as a high-weight block that requires the
-core to condense the issue's subject, and a new evidence key overrides
-the core lock for exactly one re-derive — so existing stage-label titles
-(`issue认领处理`-style) self-heal. Sessions with no issue evidence are
-untouched and derive titles exactly as before.
+**Issue evidence (issues #7 and #13)**: the extension identifies a GitHub
+issue "under work" without network access. Execution evidence comes only from
+bash command text (with heredoc bodies removed and `gh` recognized as an actual
+command), write/edit target paths (never their document bodies), structured
+git_worktree path/branch fields, and subagent working directories. Tool results
+still provide issue titles and observed branch/research-path signals, but each
+observation weighs 1 instead of the execution weight 3. When execution and
+observation describe the same issue and signal kind, only the higher weight is
+counted. A unique mutate claim on the top-scoring issue wins outright;
+otherwise the top must lead the runner-up by 2x. Winning evidence is injected
+into the title prompt as a high-weight block, and a new evidence key overrides
+the core lock for exactly one re-derive so existing stage-label titles
+(`issue认领处理`-style) self-heal. Sessions with no issue evidence are untouched.
 
 ## Development
 

@@ -1,6 +1,6 @@
 // issue #7 — work-evidence extraction from tool calls / tool results,
 // plus its high-weight injection into the title prompt (evidencePromptBlock).
-import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock, slugToCore, shouldReDerive } from "../lib/auto-rename-core";
+import { extractWorkEvidence, buildUserPrompt, evidencePromptBlock, slugToCore, shouldReDerive, stripHeredocBodies, splitCommandSegments, ghIssueAction } from "../lib/auto-rename-core";
 import type { WorkEvidence } from "../lib/auto-rename-core";
 
 // zero-dep helpers, inlined (no test framework — same pattern as test/auto-rename-core.test.ts)
@@ -18,6 +18,10 @@ function eq(name: string, actual: unknown, expected: unknown): void {
 const toolCall = (command: string) => ({
   type: "message",
   message: { role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command } }] },
+});
+const namedToolCall = (name: string, args: Record<string, unknown>) => ({
+  type: "message",
+  message: { role: "assistant", content: [{ type: "toolCall", name, arguments: args }] },
 });
 const toolResult = (text: string) => ({
   type: "message",
@@ -133,6 +137,115 @@ eq("binary counting keeps dominance sane", evBinary?.issueNumber, 888);
 // empty branch / no tool activity -> null
 eq("no messages -> null", extractWorkEvidence([]), null);
 eq("user-only branch -> null", extractWorkEvidence([userMsg("hello"), userMsg("看一下 issue 460")]), null);
+
+// ---- issue #13 A2: quote-aware bash command evidence helpers -----------------
+
+// Real gh commands, including env assignment and the command wrapper.
+eq("gh comment is a mutate", ghIssueAction("gh issue comment 13 --body x")?.kind, "mutate");
+eq("gh view captures number", ghIssueAction("FOO=bar command gh issue view 460 --json title")?.issueNumber, 460);
+eq("gh edit is a mutate", ghIssueAction("gh issue edit 7 --add-assignee @me")?.issueNumber, 7);
+
+// Search text, quoted text, partial issue numbers and unsupported wrappers fail closed.
+eq("rg pattern is not gh", ghIssueAction("rg 'gh issue comment 188' session.jsonl"), null);
+eq("quoted gh is not a command", ghIssueAction("'gh issue comment 188'"), null);
+eq("unsupported wrapper is not guessed", ghIssueAction("sudo gh issue close 13"), null);
+eq("issue number must be a complete token", ghIssueAction("gh issue view 13x"), null);
+
+// Separators inside quotes stay inside their segment.
+const segments = splitCommandSegments("printf '&& ; |' && gh issue view 13\ngh issue close 14");
+eq("quote-aware segment count", segments.length, 3);
+eq("first segment retains quoted separators", segments[0], "printf '&& ; |'");
+eq("second segment is the real view", ghIssueAction(segments[1])?.issueNumber, 13);
+eq("third segment is the real close", ghIssueAction(segments[2])?.kind, "mutate");
+
+const heredoc = "gh issue create --body-file - <<'EOF'\ngh issue comment 188\nissue-188-x10-release\nEOF\ngh issue view 13";
+const stripped = stripHeredocBodies(heredoc);
+check("heredoc body removed", !stripped.includes("comment 188") && !stripped.includes("x10-release"));
+check("command after heredoc retained", stripped.includes("gh issue view 13"));
+check("dash heredoc removed", !stripHeredocBodies("cat <<-EOF\ngh issue close 9\nEOF").includes("close 9"));
+
+// ---- issue #13 A1: execution evidence selected by tool field -----------------
+
+const pollutedWrite = namedToolCall("write", {
+  path: "/tmp/evidence-fixture.md",
+  content: "gh issue comment 188\nissue-188-x10-release\ngithub-issue-driven/z/p/issue-188/research/",
+});
+eq("write body alone creates no evidence", extractWorkEvidence([pollutedWrite]), null);
+
+const writeTarget = namedToolCall("write", {
+  path: "/home/me/.github-issue-driven/zhuxixi/pi-auto-rename/issue-13/research/note.md",
+  content: "gh issue comment 188 and issue-188-x10-release are only examples",
+});
+eq("write target path claims its own issue", extractWorkEvidence([writeTarget])?.issueNumber, 13);
+
+const editTarget = namedToolCall("edit", {
+  path: "/home/me/.github-issue-driven/zhuxixi/pi-auto-rename/issue-14/research/note.md",
+  edits: [{ oldText: "issue-188-x10-release", newText: "issue-999-other-work" }],
+});
+eq("edit target counts but edit bodies do not", extractWorkEvidence([editTarget])?.issueNumber, 14);
+
+const gitWorktree = namedToolCall("git_worktree", {
+  action: "add",
+  path: "/repo/.pi/worktrees/issue-15-real-work",
+  branch: "issue-15-real-work",
+});
+eq("git_worktree structured fields claim issue", extractWorkEvidence([gitWorktree])?.issueNumber, 15);
+
+const child = namedToolCall("subagent", {
+  agent: "implementer",
+  cwd: "/repo/.pi/worktrees/issue-16-real-work",
+  task: "Discuss gh issue comment 188 and issue-188-x10-release",
+});
+eq("subagent cwd counts but task does not", extractWorkEvidence([child])?.issueNumber, 16);
+
+const readOnly = namedToolCall("read", {
+  path: "/repo/.pi/worktrees/issue-17-not-a-claim/file.ts",
+});
+eq("read path is not execution evidence", extractWorkEvidence([readOnly]), null);
+
+const searched = toolCall("rg 'gh issue comment 188' /tmp/session.jsonl");
+eq("bash rg pattern does not mutate", extractWorkEvidence([searched]), null);
+
+// ---- issue #13 A3-A6: downweighted observations, max-source scoring ----------
+
+// Title capture alone is not a claim.
+eq("title-only result is not work evidence", extractWorkEvidence([toolResult(GH_VIEW_460)]), null);
+
+// Execution+observation of branch must be 3, not 4. If summed to 4,
+// issue 20 would beat issue 10's two observation points at exactly 2x.
+const maxSource = extractWorkEvidence([
+  toolCall("git worktree add .pi/worktrees/issue-20-real-work -b issue-20-real-work"),
+  toolResult("issue-20-real-work"),
+  toolResult("issue-10-other-work github-issue-driven/z/p/issue-10/research/"),
+]);
+eq("same signal kind takes highest source weight", maxSource, null);
+
+// Real #178 shape: two observations beat three one-point observations.
+const observed178 = extractWorkEvidence([
+  toolResult("issue-178-accept-registration-race github-issue-driven/z/p/issue-178/research/"),
+  toolResult("issue-33-other-work"),
+  toolResult("github-issue-driven/z/p/issue-170/research/"),
+  toolResult("github-issue-driven/z/p/issue-182/research/"),
+]);
+eq("two result observations retain issue 178", observed178?.issueNumber, 178);
+eq("result branch still supplies slug", observed178?.slug, "accept-registration-race");
+
+// Full #13 pollution shape: only #11 has a real mutate. #188 appears in
+// search text, a write body, heredoc body and find output.
+const integrated13 = extractWorkEvidence([
+  toolCall("gh issue view 11"),
+  toolCall("gh issue comment 11 --body start"),
+  toolCall("mkdir -p ~/.github-issue-driven/zhuxixi/pi-auto-rename/issue-11/research"),
+  toolCall("git worktree add .pi/worktrees/issue-11-evidence-dominance -b issue-11-evidence-dominance"),
+  toolCall("rg 'gh issue comment 188' /tmp/session.jsonl"),
+  namedToolCall("write", {
+    path: "/tmp/examples.md",
+    content: "issue-188-x10-release github-issue-driven/z/p/issue-188/research/",
+  }),
+  toolCall("gh issue create --body-file - <<'EOF'\ngh issue comment 188\nissue-188-x10-release\nEOF"),
+  toolResult("github-issue-driven/z/p/issue-188/research/"),
+]);
+eq("document and result pollution no longer hides issue 11", integrated13?.issueNumber, 11);
 
 // ---- evidencePromptBlock + buildUserPrompt evidence param (issue #7 task 2) ---
 const EV: WorkEvidence = { issueNumber: 460, title: "bug(test): pytest 写穿真实配置", slug: "test-config-isolation", key: "issue:460" };

@@ -605,7 +605,9 @@ export function formatStatusLine(
 // user prompts ("看一下 issue 460" names no subject). Zero network: the issue
 // title is parsed from `gh issue view` output already present in the
 // transcript. Signals are counted BINARY per issue (a worktree path appears
-// in dozens of later commands; occurrence counts would inflate it).
+// in dozens of later commands; occurrence counts would inflate it). Tool-result
+// text yields weight-1 OBSERVED branch/path signals — output that merely
+// mentions an issue never outweighs acting on another (issue #13).
 
 export interface WorkEvidence {
   issueNumber: number;
@@ -614,30 +616,85 @@ export interface WorkEvidence {
   key: string;     // "issue:460" — state comparison key
 }
 
-// explicit issue mutations: the strongest claim ("working on", not "looking at")
-const RE_ISSUE_MUTATE = /gh\s+issue\s+(?:edit|close|reopen|comment)\s+(\d+)/g;
-// gh issue view N is weak: triage sessions view dozens of issues
-const RE_ISSUE_VIEW = /gh\s+issue\s+view\s+(\d+)/g;
 // branch / worktree slugs (issue-460-test-config-isolation) claim + carry a subject slug
 const RE_BRANCH_SLUG = /(?<![\w-])issue-(\d+)-([a-z0-9][a-z0-9-]{2,})/gi;
 // the github-issue-driven research/spec directory layout claims its issue
 const RE_DRIVEN_PATH = /github-issue-driven\/[^\s"'/]+\/[^\s"'/]+\/issue-(\d+)\//g;
+
+// Quote-aware parsing of executed bash commands (issue #13): a `gh issue`
+// phrase only counts as evidence when it is an executed command segment — not
+// text inside quotes, heredoc bodies, or search patterns.
+export function stripHeredocBodies(command: string): string {
+  return command.replace(
+    /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?\n[ \t]*\2\b/g,
+    "<<HEREDOC-STRIPPED>>",
+  );
+}
+
+export function splitCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const push = (end: number) => {
+    const segment = command.slice(start, end).trim();
+    if (segment) segments.push(segment);
+  };
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === "\n" || ch === ";" || ch === "|" || ch === "&") {
+      push(i);
+      if ((ch === "|" || ch === "&") && command[i + 1] === ch) i += 1;
+      start = i + 1;
+    }
+  }
+  push(command.length);
+  return segments;
+}
+
+export function ghIssueAction(
+  segment: string,
+): { kind: "mutate" | "view"; issueNumber: number } | null {
+  const match = segment.trimStart().match(
+    /^(?:(?:[A-Za-z_][A-Za-z0-9_]*)=(?:"[^"]*"|'[^']*'|\S+)\s+)*(?:command\s+)?gh\s+issue\s+(edit|close|reopen|comment|view)\s+(\d+)(?:\s|$)/,
+  );
+  if (!match) return null;
+  return {
+    kind: match[1] === "view" ? "view" : "mutate",
+    issueNumber: Number(match[2]),
+  };
+}
 
 function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
   const map = new Map<number, IssueSignals>();
   const sig = (n: number): IssueSignals => {
     let s = map.get(n);
     if (!s) {
-      s = { mutate: false, view: false, branch: false, path: false, slug: "", title: "" };
+      s = { mutate: false, view: false, branch: false, path: false, observedBranch: false, observedPath: false, slug: "", title: "" };
       map.set(n, s);
     }
     return s;
   };
-  const claimSlug = (text: string) => {
+  const claimSlug = (text: string, observed = false) => {
     for (const mm of text.matchAll(RE_BRANCH_SLUG)) {
       const s = sig(Number(mm[1]));
-      s.branch = true;
+      if (observed) s.observedBranch = true;
+      else s.branch = true;
       if (!s.slug) s.slug = mm[2].toLowerCase();
+    }
+  };
+  const claimPath = (text: string, observed = false) => {
+    for (const mm of text.matchAll(RE_DRIVEN_PATH)) {
+      const s = sig(Number(mm[1]));
+      if (observed) s.observedPath = true;
+      else s.path = true;
     }
   };
   for (const entry of branch) {
@@ -646,18 +703,37 @@ function scanIssueSignals(branch: any[]): Map<number, IssueSignals> {
     if (m.role === "assistant" && Array.isArray(m.content)) {
       for (const b of m.content) {
         if (b?.type !== "toolCall") continue;
-        const args = JSON.stringify(b.arguments ?? {});
-        for (const mm of args.matchAll(RE_ISSUE_MUTATE)) sig(Number(mm[1])).mutate = true;
-        for (const mm of args.matchAll(RE_ISSUE_VIEW)) sig(Number(mm[1])).view = true;
-        for (const mm of args.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
-        claimSlug(args);
+        const name = String(b.name ?? "");
+        const args = (b.arguments ?? {}) as Record<string, unknown>;
+        if (name === "bash") {
+          const command = stripHeredocBodies(String(args.command ?? ""));
+          for (const segment of splitCommandSegments(command)) {
+            const action = ghIssueAction(segment);
+            if (!action) continue;
+            const s = sig(action.issueNumber);
+            if (action.kind === "mutate") s.mutate = true;
+            else s.view = true;
+          }
+          claimSlug(command);
+          claimPath(command);
+          continue;
+        }
+
+        let target = "";
+        if (name === "write" || name === "edit") target = String(args.path ?? "");
+        else if (name === "git_worktree") target = JSON.stringify({ path: args.path, branch: args.branch });
+        else if (name === "subagent") target = String(args.cwd ?? "");
+        if (target) {
+          claimSlug(target);
+          claimPath(target);
+        }
       }
     }
     if (m.role === "toolResult") {
       const text = blockText(m.content);
       if (!text) continue;
-      for (const mm of text.matchAll(RE_DRIVEN_PATH)) sig(Number(mm[1])).path = true;
-      claimSlug(text);
+      claimSlug(text, true);   // observed claims (weight 1): result text reports, it does not act
+      claimPath(text, true);
       captureIssueTitles(text, sig);
     }
   }
@@ -691,28 +767,40 @@ function captureIssueTitles(text: string, sig: (n: number) => IssueSignals): voi
   }
 }
 
-const W_MUTATE = 6, W_BRANCH = 3, W_PATH = 3, W_VIEW = 1;
+const W_MUTATE = 6, W_BRANCH = 3, W_PATH = 3, W_VIEW = 1, W_OBSERVED = 1;
 
-/** Per-issue signal detail (exported so pickDominant has a testable contract). */
+/** Per-issue signal detail (exported so pickDominant has a testable contract).
+ *  `branch`/`path` are EXECUTION claims from tool-call fields;
+ *  `observedBranch`/`observedPath` are weight-1 observations from toolResult
+ *  text (issue #13) — output reports mentions, it does not act on them. */
 export interface IssueSignals {
-  mutate: boolean; view: boolean; branch: boolean; path: boolean;
-  slug: string; title: string;
+  mutate: boolean;
+  view: boolean;
+  branch: boolean;
+  path: boolean;
+  observedBranch?: boolean;
+  observedPath?: boolean;
+  slug: string;
+  title: string;
 }
 
-/** One scored issue: `w` is the weighted total (mutate6 | branch3 | path3 | view1). */
+/** One scored issue: `w` is the weighted total
+ *  (mutate6 | execution branch/path3 | observed branch/path1 | view1), taking
+ *  the HIGHEST source weight per kind, so execution+observation of the same
+ *  branch scores 3, never 4. */
 export interface RankedIssue { n: number; s: IssueSignals; w: number }
 
 /** Pick the dominant issue out of a ranked list (highest `w` first).
  *  Decision order:
  *   1. empty list -> null;
- *   2. top has no claim signal (mutate/branch/path) -> null;
+ *   2. top has no claim signal (mutate/branch/path/observed) -> null;
  *   3. a unique mutate holder that IS the top wins outright: exactly one issue
  *      received a write operation, so there is no ambiguity for the 2x ratio
  *      (built for "viewing many, working on none") to guard against (issue #11);
  *   4. otherwise the old gate: the top must reach 2x the runner-up. */
 export function pickDominant(ranked: RankedIssue[]): number | null {
   const top = ranked[0];
-  if (!top || !(top.s.mutate || top.s.branch || top.s.path)) return null;  // no claim at all
+  if (!top || !(top.s.mutate || top.s.branch || top.s.path || top.s.observedBranch || top.s.observedPath)) return null;  // no claim at all
   const mutates = ranked.filter((r) => r.s.mutate);
   if (mutates.length === 1 && mutates[0].n === top.n) return top.n;        // unique write claim
   const second = ranked[1];
@@ -728,7 +816,10 @@ export function extractWorkEvidence(branch: any[]): WorkEvidence | null {
   const ranked: RankedIssue[] = [...map.entries()]
     .map(([n, s]) => ({
       n, s,
-      w: (s.mutate ? W_MUTATE : 0) + (s.branch ? W_BRANCH : 0) + (s.path ? W_PATH : 0) + (s.view ? W_VIEW : 0),
+      w: (s.mutate ? W_MUTATE : 0) +
+        (s.branch ? W_BRANCH : s.observedBranch ? W_OBSERVED : 0) +
+        (s.path ? W_PATH : s.observedPath ? W_OBSERVED : 0) +
+        (s.view ? W_VIEW : 0),
     }))
     .sort((a, b) => b.w - a.w || a.n - b.n);
   const n = pickDominant(ranked);
